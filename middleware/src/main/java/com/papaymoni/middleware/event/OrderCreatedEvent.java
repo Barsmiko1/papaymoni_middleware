@@ -1,4 +1,13 @@
 package com.papaymoni.middleware.event;
 
-public class OrderCreatedEvent {
+import lombok.NoArgsConstructor;
+
+/**
+ * Event fired when an order is created
+ */
+@NoArgsConstructor
+public class OrderCreatedEvent extends OrderEvent {
+    public OrderCreatedEvent(String orderId, Long userId) {
+        super(orderId, userId);
+    }
 }

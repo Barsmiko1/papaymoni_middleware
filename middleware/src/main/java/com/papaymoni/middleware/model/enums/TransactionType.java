@@ -1,4 +1,8 @@
 package com.papaymoni.middleware.model.enums;
 
-public class TransactionType {
+public enum TransactionType {
+    DEPOSIT,
+    WITHDRAWAL,
+    FEE,
+    REFUND
 }

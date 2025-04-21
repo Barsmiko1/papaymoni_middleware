@@ -138,18 +138,19 @@ import com.papaymoni.middleware.dto.UserProfileDto;
 import com.papaymoni.middleware.dto.UserRegistrationDto;
 import com.papaymoni.middleware.exception.ResourceNotFoundException;
 import com.papaymoni.middleware.model.User;
+import com.papaymoni.middleware.model.VirtualAccount;
 import com.papaymoni.middleware.repository.UserRepository;
 import com.papaymoni.middleware.service.UserService;
 import com.papaymoni.middleware.util.ReferralCodeGenerator;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.cache.annotation.Cacheable;
 
 import java.util.List;
-import java.util.Optional;
-import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 public class UserServiceImpl implements UserService {
 
@@ -255,7 +256,9 @@ public class UserServiceImpl implements UserService {
     @Override
     @Cacheable(value = "userProfiles", key = "#username")
     public UserProfileDto getUserProfileByUsername(String username) {
-        // Use the new repository method name
+        log.debug("Fetching user profile for username: {}", username);
+
+        // Use the repository method that fetches user with virtual accounts
         User user = userRepository.findByUsernameWithVirtualAccount(username)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found with username: " + username));
 
@@ -272,7 +275,16 @@ public class UserServiceImpl implements UserService {
         dto.setLastName(user.getLastName());
         dto.setPhoneNumber(user.getPhoneNumber());
         dto.setReferralCode(user.getReferralCode());
-        dto.setVirtualAccount(user.getVirtualAccount());  // Direct assignment of single object
+
+        // Select the first virtual account if available to set on the DTO
+        if (user.getVirtualAccounts() != null && !user.getVirtualAccounts().isEmpty()) {
+            VirtualAccount firstAccount = user.getVirtualAccounts().iterator().next();
+            dto.setVirtualAccount(firstAccount);
+            log.debug("Found virtual account with ID: {} for user: {}", firstAccount.getId(), user.getUsername());
+        } else {
+            log.debug("No virtual accounts found for user: {}", user.getUsername());
+        }
+
         return dto;
     }
 }

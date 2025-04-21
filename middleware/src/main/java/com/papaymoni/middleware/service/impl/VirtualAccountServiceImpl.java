@@ -5,7 +5,7 @@ import com.papaymoni.middleware.exception.ResourceNotFoundException;
 import com.papaymoni.middleware.model.User;
 import com.papaymoni.middleware.model.VirtualAccount;
 import com.papaymoni.middleware.repository.VirtualAccountRepository;
-import com.papaymoni.middleware.service.VirtualAccountProviderService;
+import com.papaymoni.middleware.service.PalmpayStaticVirtualAccountService;
 import com.papaymoni.middleware.service.VirtualAccountService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,7 +23,7 @@ import java.util.List;
 public class VirtualAccountServiceImpl implements VirtualAccountService {
 
     private final VirtualAccountRepository virtualAccountRepository;
-    private final VirtualAccountProviderService virtualAccountProviderService;
+    private final PalmpayStaticVirtualAccountService palmpayStaticVirtualAccountService;
 
     @Override
     @Cacheable(value = "userVirtualAccounts", key = "#user.id")
@@ -39,7 +39,7 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
         log.debug("Creating new virtual account for user ID: {} with currency: {}", user.getId(), currency);
 
         // Call third-party provider to create virtual account
-        VirtualAccountResponse response = virtualAccountProviderService.createVirtualAccount(user, currency);
+        VirtualAccountResponse response = palmpayStaticVirtualAccountService.createVirtualAccount(user, currency);
 
         // Create and save virtual account in our system
         VirtualAccount virtualAccount = new VirtualAccount();

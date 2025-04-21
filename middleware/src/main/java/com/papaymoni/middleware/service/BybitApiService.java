@@ -4,6 +4,12 @@ import com.papaymoni.middleware.dto.BybitApiResponse;
 import com.papaymoni.middleware.model.BybitCredentials;
 
 public interface BybitApiService {
+    /**
+     * Test basic connectivity to Bybit API
+     * @return true if connection is successful
+     */
+    boolean testConnection();
+
     <T> BybitApiResponse<T> executeRequest(String endpoint, String method, Object payload, BybitCredentials credentials, Class<T> responseType);
     boolean verifyCredentials(BybitCredentials credentials);
     BybitApiResponse<?> getAds(String tokenId, String currencyId, String side, BybitCredentials credentials);

@@ -8,7 +8,7 @@ import com.papaymoni.middleware.model.VirtualAccount;
 import com.papaymoni.middleware.repository.TransactionRepository;
 import com.papaymoni.middleware.service.GLService;
 import com.papaymoni.middleware.service.PaymentService;
-import com.papaymoni.middleware.service.ThirdPartyPaymentService;
+import com.papaymoni.middleware.service.PalmpayPaymentGatewayService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -17,7 +17,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.Optional;
 
 import static com.papaymoni.middleware.config.RabbitMQConfig.PAYMENT_EXCHANGE;
 import static com.papaymoni.middleware.config.RabbitMQConfig.PAYMENT_PROCESSED_KEY;
@@ -28,7 +27,7 @@ import static com.papaymoni.middleware.config.RabbitMQConfig.PAYMENT_PROCESSED_K
 public class PaymentServiceImpl implements PaymentService {
     private final TransactionRepository transactionRepository;
     private final GLService glService;
-    private final ThirdPartyPaymentService thirdPartyPaymentService;
+    private final PalmpayPaymentGatewayService palmpayPaymentGatewayService;
     private final RabbitTemplate rabbitTemplate;
 
     // Fee is 1.2% capped at 1,200 NGN
@@ -110,8 +109,8 @@ public class PaymentServiceImpl implements PaymentService {
         glService.creditFeeAccount(fee);
         log.info("Credited {} fee to platform account", fee);
 
-        // Process the actual payment via third-party provider
-        String reference = thirdPartyPaymentService.processPayment(
+        // Process the actual payment via third-party provider(PalmpayPaymentService)
+        String reference = palmpayPaymentGatewayService.processPayment(
                 order.getTargetNickName(),
                 amount,
                 order.getCurrencyId(),
@@ -123,7 +122,7 @@ public class PaymentServiceImpl implements PaymentService {
         transaction.setCompletedAt(LocalDateTime.now());
 
         // Generate receipt
-        String receiptUrl = thirdPartyPaymentService.generateReceipt(reference);
+        String receiptUrl = palmpayPaymentGatewayService.generateReceipt(reference);
         transaction.setReceiptUrl(receiptUrl);
 
         Transaction savedTransaction = transactionRepository.save(transaction);
@@ -182,7 +181,7 @@ public class PaymentServiceImpl implements PaymentService {
         transaction.setCompletedAt(LocalDateTime.now());
 
         // Generate receipt
-        String receiptUrl = thirdPartyPaymentService.generateReceipt("BUY-" + order.getId());
+        String receiptUrl = palmpayPaymentGatewayService.generateReceipt("BUY-" + order.getId());
         transaction.setReceiptUrl(receiptUrl);
         log.info("Generated receipt at {} for order {}", receiptUrl, order.getId());
 
@@ -253,7 +252,7 @@ public class PaymentServiceImpl implements PaymentService {
             return new byte[0];
         }
 
-        return thirdPartyPaymentService.getReceiptData(transaction.getReceiptUrl());
+        return palmpayPaymentGatewayService.getReceiptData(transaction.getReceiptUrl());
     }
 
     /**
