@@ -2,19 +2,53 @@ package com.papaymoni.middleware.service;
 
 import com.papaymoni.middleware.dto.VirtualAccountResponse;
 import com.papaymoni.middleware.model.User;
-import org.springframework.stereotype.Service;
 
-@Service
-public class PalmpayStaticVirtualAccountService {
+import java.io.IOException;
 
-    public VirtualAccountResponse createVirtualAccount(User user, String currency) {
-        // In a real implementation, this would call a third-party virtual account provider API
-        // For now, we'll just return a mock response
-        VirtualAccountResponse response = new VirtualAccountResponse();
-        response.setAccountNumber("VA" + System.currentTimeMillis());
-        response.setBankCode("057");
-        response.setBankName("Papay Moni Bank");
-        response.setAccountName(user.getFirstName() + " " + user.getLastName());
-        return response;
-    }
+/**
+ * Service for interacting with Palmpay Gateway virtual account APIs
+ */
+public interface PalmpayStaticVirtualAccountService {
+
+    /**
+     * Create a virtual account for a user
+     * @param user The user to create an account for
+     * @param currency The currency of the account
+     * @return VirtualAccountResponse with account details
+     * @throws IOException If there's an error communicating with Palmpay Gateway
+     */
+    VirtualAccountResponse createVirtualAccount(User user, String currency) throws IOException;
+
+    /**
+     * Update the status of a virtual account
+     * @param virtualAccountNo The virtual account number to update
+     * @param status The new status ("Enabled" or "Disabled")
+     * @return true if update was successful
+     * @throws IOException If there's an error communicating with Palmpay Gateway
+     */
+    boolean updateVirtualAccountStatus(String virtualAccountNo, String status) throws IOException;
+
+    /**
+     * Delete a virtual account
+     * @param virtualAccountNo The virtual account number to delete
+     * @return true if deletion was successful
+     * @throws IOException If there's an error communicating with Palmpay Gateway
+     */
+    boolean deleteVirtualAccount(String virtualAccountNo) throws IOException;
+
+    /**
+     * Query details for a single virtual account
+     * @param virtualAccountNo The virtual account number to query
+     * @return VirtualAccountResponse with account details
+     * @throws IOException If there's an error communicating with Palmpay Gateway
+     */
+    VirtualAccountResponse queryVirtualAccount(String virtualAccountNo) throws IOException;
+
+    /**
+     * Check if the Palmpay Gateway API is available
+     * @return true if the API is available
+     */
+    boolean isServiceAvailable();
 }
+
+

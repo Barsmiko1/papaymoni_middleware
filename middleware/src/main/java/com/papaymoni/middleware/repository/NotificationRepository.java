@@ -9,8 +9,9 @@ import java.util.List;
 
 @Repository
 public interface NotificationRepository extends JpaRepository<Notification, Long> {
+    // Changed from 'read' to 'isRead' to match the entity field
     List<Notification> findByUser(User user);
-    List<Notification> findByUserAndRead(User user, boolean read);
+    List<Notification> findByUserAndIsRead(User user, boolean isRead);
     List<Notification> findByUserAndType(User user, String type);
-    long countByUserAndRead(User user, boolean read);
+    long countByUserAndIsRead(User user, boolean isRead);
 }

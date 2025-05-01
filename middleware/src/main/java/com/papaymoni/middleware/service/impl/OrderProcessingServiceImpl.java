@@ -2,7 +2,6 @@ package com.papaymoni.middleware.service.impl;
 
 import com.papaymoni.middleware.dto.BybitApiResponse;
 import com.papaymoni.middleware.event.OrderCompletedEvent;
-import com.papaymoni.middleware.event.OrderEvent;
 import com.papaymoni.middleware.event.OrderPaidEvent;
 import com.papaymoni.middleware.exception.AssetReleaseException;
 import com.papaymoni.middleware.exception.InsufficientBalanceException;

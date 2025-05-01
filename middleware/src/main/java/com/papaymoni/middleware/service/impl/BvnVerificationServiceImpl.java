@@ -1,45 +1,57 @@
 package com.papaymoni.middleware.service.impl;
-
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.papaymoni.middleware.dto.BvnVerificationResultDto;
 import com.papaymoni.middleware.model.BvnVerification;
+import com.papaymoni.middleware.model.User;
 import com.papaymoni.middleware.repository.BvnVerificationRepository;
+import com.papaymoni.middleware.repository.UserRepository;
 import com.papaymoni.middleware.service.BvnVerificationService;
+import com.papaymoni.middleware.service.EncryptionService;
 import com.papaymoni.middleware.util.EaseIdSignUtil;
-import com.papaymoni.middleware.util.EaseIdSignUtil.SignType;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.http.HttpEntity;
+import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.util.EntityUtils;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.annotation.PostConstruct;
 import java.io.IOException;
-import java.security.*;
-import java.security.spec.PKCS8EncodedKeySpec;
+import java.io.UnsupportedEncodingException;
+import java.security.SecureRandom;
 import java.time.LocalDate;
-import java.util.*;
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
 
-@Slf4j
 @Service
+@Slf4j
 public class BvnVerificationServiceImpl implements BvnVerificationService {
 
     private final BvnVerificationRepository bvnVerificationRepository;
-    private final ObjectMapper objectMapper;
-    private final BvnVerificationStatusUpdater statusUpdater;
-    private final CloseableHttpClient httpClient;
+    private final UserRepository userRepository;
     private final BvnResponseProcessor responseProcessor;
+    private final EncryptionService encryptionService;
+    private final CacheManager cacheManager;
+    private final CloseableHttpClient httpClient;
 
-    @Value("${bvn.verification.api.url:https://open-api.easeid.ai/api/validator-service/open/bvn/inquire}")
+    private static final String CACHE_NAME = "bvnVerification";
+
+    @Value("${bvn.verification.api.url}")
     private String bvnVerificationApiUrl;
 
-    @Value("${bvn.verification.api.key:K7657831424}")
+    @Value("${bvn.verification.api.key}")
     private String apiKey;
 
     @Value("${bvn.verification.private.key}")
@@ -51,73 +63,36 @@ public class BvnVerificationServiceImpl implements BvnVerificationService {
     @Value("${app.version:1.0}")
     private String appVersion;
 
-    private PrivateKey privateKey;
-
     public BvnVerificationServiceImpl(BvnVerificationRepository bvnVerificationRepository,
-                                      ObjectMapper objectMapper,
-                                      BvnVerificationStatusUpdater statusUpdater,
-                                      BvnResponseProcessor responseProcessor) {
+                                      UserRepository userRepository,
+                                      BvnResponseProcessor responseProcessor,
+                                      EncryptionService encryptionService,
+                                      CacheManager cacheManager) {
         this.bvnVerificationRepository = bvnVerificationRepository;
-        this.objectMapper = objectMapper;
-        this.statusUpdater = statusUpdater;
+        this.userRepository = userRepository;
         this.responseProcessor = responseProcessor;
-        this.httpClient = HttpClients.createDefault();
+        this.encryptionService = encryptionService;
+        this.cacheManager = cacheManager;
+
+        // Configure HTTP client with optimized connection pooling
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setConnectTimeout(10000)
+                .setSocketTimeout(30000)
+                .setConnectionRequestTimeout(10000)
+                .build();
+
+        PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
+        connectionManager.setMaxTotal(100);
+        connectionManager.setDefaultMaxPerRoute(20);
+
+        this.httpClient = HttpClients.custom()
+                .setConnectionManager(connectionManager)
+                .setDefaultRequestConfig(requestConfig)
+                .build();
     }
 
-    @PostConstruct
-    public void init() {
-        try {
-            // Check if we have a private key
-            if (privateKeyBase64 != null && !privateKeyBase64.isEmpty()) {
-                byte[] pkcs8EncodedBytes = Base64.getDecoder().decode(privateKeyBase64);
-                PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(pkcs8EncodedBytes);
-                KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-                privateKey = keyFactory.generatePrivate(keySpec);
-                log.info("BVN verification private key loaded successfully");
-            } else {
-                log.warn("No BVN verification private key provided. Signature generation will fail.");
-            }
-        } catch (Exception e) {
-            log.error("Error initializing BVN verification service: {}", e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Generate a 32-byte random hexadecimal string for nonce
-     * @return 32-byte hex string
-     */
-    private String generateNonceStr() {
-        byte[] randomBytes = new byte[16]; // 16 bytes will convert to 32 hex characters
-        new SecureRandom().nextBytes(randomBytes);
-        return bytesToHex(randomBytes);
-    }
-
-    /**
-     * Convert byte array to hexadecimal string
-     * @param bytes byte array to convert
-     * @return hexadecimal string
-     */
-    private String bytesToHex(byte[] bytes) {
-        StringBuilder hexString = new StringBuilder();
-        for (byte b : bytes) {
-            String hex = Integer.toHexString(0xff & b);
-            if (hex.length() == 1) hexString.append('0');
-            hexString.append(hex);
-        }
-        return hexString.toString();
-    }
-
-    /**
-     * Verify BVN details against the provided information
-     * @param bvn the BVN to verify
-     * @param firstName the first name to match
-     * @param lastName the last name to match
-     * @param dateOfBirth the date of birth to match
-     * @param gender the gender to match
-     * @return verification result with match details
-     */
     @Override
-    @Transactional
+    @CachePut(value = CACHE_NAME, key = "#bvn")
     public BvnVerificationResultDto verifyBvn(
             String bvn, String firstName, String lastName,
             LocalDate dateOfBirth, String gender) {
@@ -125,7 +100,7 @@ public class BvnVerificationServiceImpl implements BvnVerificationService {
         log.info("Verifying BVN: {} for user: {} {}", bvn, firstName, lastName);
 
         try {
-            // Check if already verified
+            // Check if already verified (from cache)
             if (isBvnVerified(bvn)) {
                 log.info("BVN already verified: {}", bvn);
                 return BvnVerificationResultDto.builder()
@@ -139,71 +114,33 @@ public class BvnVerificationServiceImpl implements BvnVerificationService {
                         .build();
             }
 
-            // Prepare request payload with dynamic values
+            // Prepare request payload
             Map<String, Object> requestParams = new HashMap<>();
             requestParams.put("version", "V1.1");
-            requestParams.put("requestTime", new Date().getTime());
-            requestParams.put("nonceStr", generateNonceStr());
+            requestParams.put("requestTime", System.currentTimeMillis());
+            requestParams.put("nonceStr", generateNonce());
             requestParams.put("bvn", bvn);
 
-            log.info("BVN verification payload: {}", requestParams);
-
-            // Generate signature using EaseIdSignUtil with the fixed implementation
-            String signature;
-            try {
-                // Use the updated EaseIdSignUtil with PalmPay's approach
-                signature = EaseIdSignUtil.generateSign(requestParams, privateKeyBase64, SignType.RSA);
-                log.info("Generated EaseID signature for BVN verification");
-
-                // Format parameter string for debugging
-                StringBuilder paramString = new StringBuilder();
-                List<String> keys = new ArrayList<>(requestParams.keySet());
-                Collections.sort(keys);
-                boolean first = true;
-                for (String key : keys) {
-                    if (!first) {
-                        paramString.append("&");
-                    }
-                    paramString.append(key).append("=").append(requestParams.get(key));
-                    first = false;
-                }
-                log.debug("Parameter string used for signature: {}", paramString.toString());
-                log.debug("Generated signature: {}", signature);
-            } catch (Exception e) {
-                log.error("Failed to generate EaseID signature: {}", e.getMessage(), e);
-                return BvnVerificationResultDto.builder()
-                        .verified(false)
-                        .message("Failed to generate signature: " + e.getMessage())
-                        .responseCode("99")
-                        .build();
-            }
+            // Generate signature
+            String signature = EaseIdSignUtil.generateSign(requestParams, privateKeyBase64,
+                    EaseIdSignUtil.SignType.RSA);
 
             // Make API call
-            try {
-                String responseBody = sendBvnVerificationRequest(requestParams, signature);
+            String responseBody = sendBvnVerificationRequest(requestParams, signature);
 
-                // Process the response using the dedicated processor
-                BvnVerificationResultDto result = responseProcessor.processBvnResponse(
-                        responseBody, firstName, lastName, dateOfBirth, gender, bvn);
+            // Process the response
+            BvnVerificationResultDto result = responseProcessor.processBvnResponse(
+                    responseBody, firstName, lastName, dateOfBirth, gender, bvn);
 
-                // Save verification result if successful
-                if (result.isVerified()) {
-                    saveVerificationResult(bvn, firstName, lastName, dateOfBirth.toString(), gender);
+            // Save verification result if successful
+            if (result.isVerified()) {
+                saveVerificationResult(bvn, firstName, lastName, dateOfBirth.toString(), gender);
 
-                    // Update user's BVN verification status if they exist
-                    statusUpdater.updateBvnVerificationStatus(bvn, result);
-                }
-
-                return result;
-            } catch (Exception e) {
-                log.error("Error during BVN verification API call: {}", e.getMessage(), e);
-                return BvnVerificationResultDto.builder()
-                        .verified(false)
-                        .message("BVN verification error: " + e.getMessage())
-                        .responseCode("99")
-                        .build();
+                // Update user's BVN verification status if exist
+                updateUserBvnStatus(bvn, true);
             }
 
+            return result;
         } catch (Exception e) {
             log.error("Error verifying BVN: {}", e.getMessage(), e);
             return BvnVerificationResultDto.builder()
@@ -214,77 +151,56 @@ public class BvnVerificationServiceImpl implements BvnVerificationService {
         }
     }
 
-    /**
-     * Save the BVN verification result to the database
-     */
-    private void saveVerificationResult(String bvn, String firstName, String lastName, String dob, String gender) {
-        try {
-            BvnVerification verification = new BvnVerification();
-            verification.setBvn(bvn);
-            verification.setFirstName(firstName);
-            verification.setLastName(lastName);
-            verification.setDateOfBirth(dob);
-            verification.setGender(gender);
-            verification.setVerified(true);
-            bvnVerificationRepository.save(verification);
-            log.info("BVN verification result saved to database for BVN: {}", bvn);
-        } catch (Exception e) {
-            log.error("Error saving BVN verification result: {}", e.getMessage(), e);
-            // Continue processing even if save fails
+    @Override
+    @Cacheable(value = CACHE_NAME, key = "'verified:' + #bvn")
+    public boolean isBvnVerified(String bvn) {
+        // First check cache
+        Boolean cached = cacheManager.getCache(CACHE_NAME).get(bvn, Boolean.class);
+        if (cached != null) {
+            return cached;
         }
+
+        // Then check database - try with encrypted BVN if encryption service is available
+        boolean verified = false;
+        try {
+            String encryptedBvn = encryptionService.encrypt(bvn);
+            verified = bvnVerificationRepository.existsByBvnAndVerifiedTrue(encryptedBvn);
+        } catch (Exception e) {
+            // Fall back to direct check if encryption fails
+            verified = bvnVerificationRepository.existsByBvnAndVerifiedTrue(bvn);
+        }
+
+        // Update cache
+        cacheManager.getCache(CACHE_NAME).put(bvn, verified);
+
+        return verified;
     }
 
-    /**
-     * Test method for verifying BVN with diagnostic logging
-     * @param bvn the BVN to verify
-     * @return verification result
-     */
-    public BvnVerificationResultDto diagnosticVerifyBvn(String bvn) {
-        log.info("Running diagnostic BVN verification for BVN: {}", bvn);
+    private String generateNonce() {
+        byte[] bytes = new byte[16];
+        new SecureRandom().nextBytes(bytes);
 
-        try {
-            // Prepare request payload with dynamic values
-            Map<String, Object> requestParams = new HashMap<>();
-            requestParams.put("version", "V1.1");
-            requestParams.put("requestTime", new Date().getTime());
-            requestParams.put("nonceStr", generateNonceStr());
-            requestParams.put("bvn", bvn);
-
-            log.info("Diagnostic BVN verification payload: {}", requestParams);
-
-            // Generate signature
-            String signature = EaseIdSignUtil.generateSign(requestParams, privateKeyBase64, SignType.RSA);
-
-            // Make API call
-            String responseBody = sendBvnVerificationRequest(requestParams, signature);
-            log.info("Diagnostic BVN verification response: {}", responseBody);
-
-            return BvnVerificationResultDto.builder()
-                    .verified(true)
-                    .message("Diagnostic test completed successfully")
-                    .responseCode("00")
-                    .build();
-
-        } catch (Exception e) {
-            log.error("Error in diagnostic BVN verification: {}", e.getMessage(), e);
-            return BvnVerificationResultDto.builder()
-                    .verified(false)
-                    .message("Diagnostic test failed: " + e.getMessage())
-                    .responseCode("99")
-                    .build();
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : bytes) {
+            String hex = Integer.toHexString(0xff & b);
+            if (hex.length() == 1) hexString.append('0');
+            hexString.append(hex);
         }
+        return hexString.toString();
     }
 
-    /**
-     * Send BVN verification request using Apache HttpClient
-     *
-     * @param requestParams The request parameters
-     * @param signature The generated signature
-     * @return The response body as string
-     * @throws Exception If an error occurs during the request
-     */
-    private String sendBvnVerificationRequest(Map<String, Object> requestParams, String signature) throws Exception {
-        // Create HTTP POST request
+    private String sendBvnVerificationRequest(Map<String, Object> requestParams, String signature)
+            throws IOException {
+        ObjectMapper mapper = new ObjectMapper();
+        String requestBody;
+
+        try {
+            requestBody = mapper.writeValueAsString(requestParams);
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize request params to JSON", e);
+            throw new IOException("Failed to serialize request parameters", e);
+        }
+
         HttpPost httpPost = new HttpPost(bvnVerificationApiUrl);
 
         // Set headers
@@ -292,48 +208,105 @@ public class BvnVerificationServiceImpl implements BvnVerificationService {
         httpPost.setHeader("CountryCode", "NG");
         httpPost.setHeader("Signature", signature);
         httpPost.setHeader("Authorization", "Bearer " + apiKey);
-
-        // Set a generic User-Agent - this is important to avoid 403 errors
         httpPost.setHeader("User-Agent", appName + "/" + appVersion + " Java/" + System.getProperty("java.version"));
 
-        // Convert request params to JSON string for the request body
-        String requestBody = objectMapper.writeValueAsString(requestParams);
+        // Set request body
+        try {
+            StringEntity entity = new StringEntity(requestBody, "UTF-8");
+            httpPost.setEntity(entity);
+        } catch (Exception e) {
+            log.error("Encoding error when creating request entity", e);
+            throw new IOException("Failed to create request entity", e);
+        }
 
-        // Create request entity
-        StringEntity entity = new StringEntity(requestBody);
-        httpPost.setEntity(entity);
-
-        // Execute the request
-        log.info("Making BVN verification request to: {}", bvnVerificationApiUrl);
-        log.debug("Request body: {}", requestBody);
-
+        // Execute request with improved error handling
         try (CloseableHttpResponse response = httpClient.execute(httpPost)) {
-            // Check response status
             int statusCode = response.getStatusLine().getStatusCode();
-            log.info("BVN verification API response status: {}", statusCode);
-
-            // Get response body
             HttpEntity responseEntity = response.getEntity();
-            String responseBody = EntityUtils.toString(responseEntity);
-            log.debug("Response body: {}", responseBody);
 
-            // Check for error status codes
+            String responseBody;
+            try {
+                responseBody = EntityUtils.toString(responseEntity, "UTF-8");
+            } catch (IOException e) {
+                log.error("Failed to read response body", e);
+                throw new IOException("Failed to read response from BVN API", e);
+            }
+
+            log.debug("BVN API response status: {}", statusCode);
+
             if (statusCode >= 400) {
                 log.error("BVN verification API error: {} - {}", statusCode, responseBody);
                 throw new IOException("BVN verification API returned error: " + statusCode + " - " + responseBody);
             }
 
             return responseBody;
+        } catch (IOException e) {
+            log.error("HTTP client error during BVN verification", e);
+            throw e;
         }
     }
 
-    /**
-     * Check if BVN is already verified
-     * @param bvn the BVN to check
-     * @return true if BVN is verified
-     */
-    @Override
-    public boolean isBvnVerified(String bvn) {
-        return bvnVerificationRepository.existsByBvnAndVerifiedTrue(bvn);
+    @Transactional
+    private void saveVerificationResult(String bvn, String firstName, String lastName, String dob, String gender) {
+        try {
+            BvnVerification verification = new BvnVerification();
+
+            // Encrypt BVN before saving
+            try {
+                verification.setBvn(encryptionService.encrypt(bvn));
+            } catch (Exception e) {
+                log.warn("Failed to encrypt BVN, saving without encryption", e);
+                verification.setBvn(bvn);
+            }
+
+            verification.setFirstName(firstName);
+            verification.setLastName(lastName);
+            verification.setDateOfBirth(dob);
+            verification.setGender(gender);
+            verification.setVerified(true);
+            verification.setVerifiedAt(LocalDateTime.now());
+
+            bvnVerificationRepository.save(verification);
+
+            // Update cache
+            cacheManager.getCache(CACHE_NAME).put(bvn, true);
+            cacheManager.getCache(CACHE_NAME).put("verified:" + bvn, true);
+
+            log.info("BVN verification result saved to database for BVN: {}", bvn);
+        } catch (Exception e) {
+            log.error("Error saving BVN verification result: {}", e.getMessage(), e);
+        }
+    }
+
+    @Transactional
+    private void updateUserBvnStatus(String bvn, boolean status) {
+        try {
+            // Find user by BVN
+            String encryptedBvn = null;
+            try {
+                encryptedBvn = encryptionService.encrypt(bvn);
+            } catch (Exception e) {
+                log.warn("Failed to encrypt BVN for lookup", e);
+                encryptedBvn = bvn;
+            }
+
+            Optional<User> userOpt = userRepository.findByBvn(encryptedBvn);
+
+            if (userOpt.isPresent()) {
+                User user = userOpt.get();
+                user.setBvnVerified(status);
+                userRepository.save(user);
+
+                // Update user cache
+                cacheManager.getCache("users").put(user.getId(), user);
+                cacheManager.getCache("users").put(user.getUsername(), user);
+                cacheManager.getCache("users").put(user.getEmail(), user);
+
+                log.info("Updated BVN verification status for user: {} to: {}",
+                        user.getUsername(), status);
+            }
+        } catch (Exception e) {
+            log.error("Error updating user BVN status: {}", e.getMessage(), e);
+        }
     }
 }

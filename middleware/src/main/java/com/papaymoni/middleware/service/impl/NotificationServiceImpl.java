@@ -54,7 +54,7 @@ public class NotificationServiceImpl implements NotificationService {
 
     @Override
     public List<Notification> getUserUnreadNotifications(User user) {
-        return notificationRepository.findByUserAndRead(user, false);
+        return notificationRepository.findByUserAndIsRead(user, false);
     }
 
     @Override
@@ -70,13 +70,12 @@ public class NotificationServiceImpl implements NotificationService {
 
     @Override
     public long countUnreadNotifications(User user) {
-        return notificationRepository.countByUserAndRead(user, false);
+        return notificationRepository.countByUserAndIsRead(user, false);
     }
 
     @Override
     public void sendEmail(String to, String subject, String body) {
-        // In a real implementation, this would send an email
-        // For now, we'll just log it
+        // this would send an email
         System.out.println("Sending email to: " + to);
         System.out.println("Subject: " + subject);
         System.out.println("Body: " + body);
@@ -84,7 +83,7 @@ public class NotificationServiceImpl implements NotificationService {
 
     @Override
     public void sendSms(String phoneNumber, String message) {
-        // In a real implementation, this would send an SMS
+        // this would send an SMS
         // For now, we'll just log it
         System.out.println("Sending SMS to: " + phoneNumber);
         System.out.println("Message: " + message);
