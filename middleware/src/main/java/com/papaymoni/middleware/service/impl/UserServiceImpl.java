@@ -8,6 +8,7 @@ import com.papaymoni.middleware.repository.UserRepository;
 import com.papaymoni.middleware.service.EmailVerificationService;
 import com.papaymoni.middleware.service.EncryptionService;
 import com.papaymoni.middleware.service.UserService;
+import com.papaymoni.middleware.service.VirtualAccountService;
 import com.papaymoni.middleware.util.ReferralCodeGenerator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -27,6 +28,7 @@ public class UserServiceImpl implements UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final EmailVerificationService emailVerificationService;
+    private final VirtualAccountService virtualAccountService;
 
     private final EncryptionService encryptionService;
     private final CacheManager cacheManager;
@@ -35,12 +37,14 @@ public class UserServiceImpl implements UserService {
     public UserServiceImpl(UserRepository userRepository,
                            PasswordEncoder passwordEncoder,
                            EncryptionService encryptionService,
+                           VirtualAccountService virtualAccountService,
                            CacheManager cacheManager,
                            RabbitTemplate rabbitTemplate,
                            EmailVerificationService emailVerificationService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.emailVerificationService = emailVerificationService;
+        this.virtualAccountService = virtualAccountService;
         this.encryptionService = encryptionService;
         this.cacheManager = cacheManager;
         this.rabbitTemplate = rabbitTemplate;
@@ -206,13 +210,31 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Cacheable(value = "userProfiles", key = "#username")
+    @Transactional(readOnly = true)
     public UserProfileDto getUserProfileByUsername(String username) {
         log.debug("Fetching user profile for username: {}", username);
 
-        User user = userRepository.findByUsernameWithVirtualAccount(username)
+        // Get user without loading virtual accounts
+        User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found with username: " + username));
 
-        return convertToDto(user);
+        // Create DTO and populate basic user info
+        UserProfileDto dto = new UserProfileDto();
+        dto.setId(user.getId());
+        dto.setUsername(user.getUsername());
+        dto.setEmail(user.getEmail());
+        dto.setFirstName(user.getFirstName());
+        dto.setLastName(user.getLastName());
+        dto.setPhoneNumber(user.getPhoneNumber());
+        dto.setReferralCode(user.getReferralCode());
+
+        // Use the injected VirtualAccountService instead
+        List<VirtualAccount> accounts = virtualAccountService.getUserVirtualAccounts(user);
+        if (accounts != null && !accounts.isEmpty()) {
+            dto.setVirtualAccount(accounts.get(0));
+        }
+
+        return dto;
     }
 
     private UserProfileDto convertToDto(User user) {

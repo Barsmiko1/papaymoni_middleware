@@ -50,10 +50,14 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
     }
 
     @Override
-    @Cacheable(value = USER_ACCOUNTS_CACHE, key = "#user.id")
+    @Cacheable(value = USER_ACCOUNTS_CACHE, key = "#user.id", unless = "#result == null")
+    @Transactional(readOnly = true)  // Add this annotation
     public List<VirtualAccount> getUserVirtualAccounts(User user) {
         log.debug("Fetching virtual accounts for user ID: {}", user.getId());
-        return virtualAccountRepository.findByUser(user);
+
+        // Use userId instead of the full User object to avoid serialization issues
+        Long userId = user.getId();
+        return virtualAccountRepository.findByUserId(userId);
     }
 
     @Override
@@ -214,10 +218,13 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
     }
 
     @Override
-    @Cacheable(value = USER_ACCOUNTS_CACHE, key = "#user.id + '-' + #currency")
+    @Cacheable(value = USER_ACCOUNTS_CACHE, key = "#user.id + '-' + #currency", unless = "#result == null")
+    @Transactional(readOnly = true)  // Add this annotation
     public List<VirtualAccount> getUserVirtualAccountsByCurrency(User user, String currency) {
         log.debug("Fetching virtual accounts for user ID: {} with currency: {}", user.getId(), currency);
-        return virtualAccountRepository.findByUserAndCurrency(user, currency);
+
+        // Use the query that takes userId and currency
+        return virtualAccountRepository.findByUserIdAndCurrency(user.getId(), currency);
     }
 
     /**

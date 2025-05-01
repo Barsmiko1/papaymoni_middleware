@@ -175,16 +175,11 @@ public class AuthController {
             try {
                 log.debug("Fetching virtual accounts for user: {}", currentUser.getUsername());
 
-                // Check cache first
-                User user = cacheManager.getCache("users").get(currentUser.getUsername(), User.class);
-                if (user == null) {
-                    user = userRepository.findByUsername(currentUser.getUsername())
-                            .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+                // Get user by username - don't try to get from cache first
+                User user = userRepository.findByUsername(currentUser.getUsername())
+                        .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
-                    // Cache user for future requests
-                    cacheManager.getCache("users").put(currentUser.getUsername(), user);
-                }
-
+                // Call service method directly with the user
                 List<VirtualAccount> accounts = virtualAccountService.getUserVirtualAccounts(user);
 
                 return ResponseEntity.ok(ApiResponse.success("Virtual accounts retrieved successfully", accounts));

@@ -1,5 +1,6 @@
 package com.papaymoni.middleware.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
 
 import javax.persistence.*;
@@ -15,9 +16,31 @@ public class VirtualAccount {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @OneToOne
+    //@OneToOne
+//    @JoinColumn(name = "user_id", nullable = false)
+//    @JsonIgnoreProperties(value = {"user"}, allowSetters = true)
+//    private User user;
+
+    @ManyToOne(fetch = FetchType.LAZY)  // Change to LAZY fetch type
     @JoinColumn(name = "user_id", nullable = false)
+    @JsonIgnoreProperties("virtualAccounts")  // Add this annotation
     private User user;
+
+    // Avoid circular reference in toString
+    @Override
+    public String toString() {
+        return "VirtualAccount{" +
+                "id=" + id +
+                ", accountNumber='" + accountNumber + '\'' +
+                ", bankCode='" + bankCode + '\'' +
+                ", bankName='" + bankName + '\'' +
+                ", accountName='" + accountName + '\'' +
+                ", currency='" + currency + '\'' +
+                ", balance=" + balance +
+                ", active=" + active +
+                ", userId=" + (user != null ? user.getId() : null) +
+                '}';
+    }
 
     private String accountNumber;
     private String bankCode;

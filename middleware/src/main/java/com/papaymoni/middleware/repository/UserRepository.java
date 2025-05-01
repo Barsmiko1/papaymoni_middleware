@@ -21,7 +21,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("SELECT u FROM User u WHERE u.username = :username OR u.email = :email")
     Optional<User> findByUsernameOrEmail(@Param("username") String username, @Param("email") String email);
 
-    // New method with join fetch to eagerly load virtual accounts in a single query
-    @Query("SELECT u FROM User u LEFT JOIN FETCH u.virtualAccounts WHERE u.username = :username")
-    Optional<User> findByUsernameWithVirtualAccount(@Param("username") String username);
+//    // New method with join fetch to eagerly load virtual accounts in a single query
+//    @Query("SELECT u FROM User u LEFT JOIN FETCH u.virtualAccounts WHERE u.username = :username")
+//    Optional<User> findByUsernameWithVirtualAccount(@Param("username") String username);
 }

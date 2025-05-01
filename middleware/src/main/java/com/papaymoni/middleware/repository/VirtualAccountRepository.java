@@ -13,7 +13,7 @@ import java.util.Optional;
 
 @Repository
 public interface VirtualAccountRepository extends JpaRepository<VirtualAccount, Long> {
-    List<VirtualAccount> findByUser(User user);
+    //List<VirtualAccount> findByUser(User user);
     Optional<VirtualAccount> findByAccountNumber(String accountNumber);
     List<VirtualAccount> findByUserAndCurrency(User user, String currency);
     List<VirtualAccount> findByUserAndActive(User user, boolean active);
@@ -30,6 +30,9 @@ public interface VirtualAccountRepository extends JpaRepository<VirtualAccount, 
 
     @Query("SELECT v FROM VirtualAccount v JOIN FETCH v.user WHERE v.accountNumber = :accountNumber")
     Optional<VirtualAccount> findByAccountNumberWithUser(@Param("accountNumber") String accountNumber);
+
+    @Query("SELECT v FROM VirtualAccount v WHERE v.user.id = :userId AND v.currency = :currency")
+    List<VirtualAccount> findByUserIdAndCurrency(@Param("userId") Long userId, @Param("currency") String currency);
 
     @Query(value = "SELECT * FROM virtual_accounts WHERE user_id = :userId ORDER BY created_at DESC LIMIT 1",
             nativeQuery = true)

@@ -1,5 +1,6 @@
 package com.papaymoni.middleware.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
 
 import javax.persistence.*;
@@ -42,6 +43,7 @@ public class User {
     private String referredBy;
 
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonIgnoreProperties("user")  // Add this annotation
     private Set<VirtualAccount> virtualAccounts;
 
     private LocalDateTime createdAt;
@@ -76,8 +78,6 @@ public class User {
                 ", bvnVerified=" + bvnVerified +
                 ", referralCode='" + referralCode + '\'' +
                 ", referredBy='" + referredBy + '\'' +
-                ", createdAt=" + createdAt +
-                ", updatedAt=" + updatedAt +
                 '}';
     }
 }

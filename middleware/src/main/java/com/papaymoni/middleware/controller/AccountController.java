@@ -2,7 +2,7 @@ package com.papaymoni.middleware.controller;
 
 import com.papaymoni.middleware.dto.ApiResponse;
 import com.papaymoni.middleware.dto.VirtualAccountDto;
-import com.papaymoni.middleware.exception.ResourceNotFoundException;
+import com.papaymoni.middleware.exception.*;
 import com.papaymoni.middleware.model.User;
 import com.papaymoni.middleware.model.VirtualAccount;
 import com.papaymoni.middleware.repository.UserRepository;
@@ -43,9 +43,11 @@ public class AccountController {
         try {
             log.debug("Fetching virtual accounts for user: {}", currentUser.getUsername());
 
+            // Directly find user - don't try to get from cache
             User user = userRepository.findByUsername(currentUser.getUsername())
                     .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
+            // Don't manipulate cache directly, rely on service's @Cacheable annotation
             List<VirtualAccount> accounts = virtualAccountService.getUserVirtualAccounts(user);
 
             return ResponseEntity.ok(ApiResponse.success("Virtual accounts retrieved successfully", accounts));
