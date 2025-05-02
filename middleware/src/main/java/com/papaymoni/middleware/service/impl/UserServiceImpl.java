@@ -1,4 +1,5 @@
 package com.papaymoni.middleware.service.impl;
+import com.papaymoni.middleware.dto.UserEventDto;
 import com.papaymoni.middleware.dto.UserProfileDto;
 import com.papaymoni.middleware.dto.UserRegistrationDto;
 import com.papaymoni.middleware.exception.ResourceNotFoundException;
@@ -49,6 +50,17 @@ public class UserServiceImpl implements UserService {
         this.cacheManager = cacheManager;
         this.rabbitTemplate = rabbitTemplate;
 
+    }
+    @Override
+    public UserEventDto getUserEventDtoById(Long id) {
+        User user = getUserById(id); // reuse existing method to fetch user
+        UserEventDto dto = new UserEventDto();
+        dto.setUserId(user.getId());
+        dto.setUsername(user.getUsername());
+        dto.setEmail(user.getEmail());
+        dto.setPhoneNumber(user.getPhoneNumber());
+        dto.setReferredBy(user.getReferredBy());
+        return dto;
     }
 
     @Override

@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Map;
 
 import static com.papaymoni.middleware.config.RabbitMQConfig.PAYMENT_EXCHANGE;
 import static com.papaymoni.middleware.config.RabbitMQConfig.PAYMENT_PROCESSED_KEY;
@@ -198,18 +199,19 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     /**
-     * Process a deposit to a virtual account
+     * Process a deposit from Palmpay webhook
      * @param virtualAccount the virtual account receiving the deposit
      * @param amount the amount being deposited
-     * @param reference the external reference for the deposit
+     * @param orderReference the Palmpay order reference
+     * @param payerDetails details of the payer
      * @return the created transaction
      */
     @Override
     @Transactional
-    public Transaction processDeposit(VirtualAccount virtualAccount, BigDecimal amount, String reference) {
+    public Transaction processPalmpayDeposit(VirtualAccount virtualAccount, BigDecimal amount, String orderReference, Map<String, String> payerDetails) {
         User user = virtualAccount.getUser();
         log.info("Processing deposit of {} to virtual account {} for user {}",
-                amount, virtualAccount.getId(), user.getId());
+                amount, virtualAccount.getAccountNumber(), user.getId());
 
         // Create transaction record
         Transaction transaction = new Transaction();
@@ -220,11 +222,30 @@ public class PaymentServiceImpl implements PaymentService {
         transaction.setFee(BigDecimal.ZERO); // No fee for deposits
         transaction.setCurrency(virtualAccount.getCurrency());
         transaction.setStatus("COMPLETED");
-        transaction.setExternalReference(reference);
-        transaction.setCompletedAt(LocalDateTime.now());
-        //transaction.setDescription("Deposit to virtual account " + virtualAccount.getAccountNumber());
+        transaction.setExternalReference(orderReference);
 
-        // Credit user's balance
+        // Set payment details if provided
+        if (payerDetails != null && !payerDetails.isEmpty()) {
+            transaction.setPaymentMethod("BANK_TRANSFER");
+
+            // Create a formatted string with the payer details
+            StringBuilder paymentDetailsBuilder = new StringBuilder();
+            if (payerDetails.containsKey("bankName")) {
+                paymentDetailsBuilder.append(payerDetails.get("bankName")).append(" - ");
+            }
+            if (payerDetails.containsKey("accountNo")) {
+                paymentDetailsBuilder.append(payerDetails.get("accountNo")).append(" - ");
+            }
+            if (payerDetails.containsKey("accountName")) {
+                paymentDetailsBuilder.append(payerDetails.get("accountName"));
+            }
+
+            transaction.setPaymentDetails(paymentDetailsBuilder.toString());
+        }
+
+        transaction.setCompletedAt(LocalDateTime.now());
+
+        // Credit user's balance in GL system
         glService.creditUserAccount(user, amount);
         log.info("Credited {} to user {} account", amount, user.getId());
 
@@ -237,6 +258,14 @@ public class PaymentServiceImpl implements PaymentService {
 
         return savedTransaction;
     }
+
+    @Override
+    @Transactional
+    public Transaction processDeposit(VirtualAccount virtualAccount, BigDecimal amount, String reference) {
+        // Delegate to processPalmpayDeposit with null payerDetails
+        return processPalmpayDeposit(virtualAccount, amount, reference, null);
+    }
+
 
     /**
      * Get receipt data for a transaction

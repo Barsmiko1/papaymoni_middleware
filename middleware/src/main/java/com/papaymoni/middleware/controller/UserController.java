@@ -18,6 +18,7 @@ public class UserController {
 
     private final UserService userService;
 
+
     public UserController(UserService userService) {
         this.userService = userService;
     }
@@ -42,8 +43,6 @@ public class UserController {
         User user = userService.getUserByUsername(currentUser.getUsername());
 
         // Update only allowed fields
-        user.setFirstName(userUpdate.getFirstName());
-        user.setLastName(userUpdate.getLastName());
         user.setPhoneNumber(userUpdate.getPhoneNumber());
 
         User updatedUser = userService.updateUser(user);

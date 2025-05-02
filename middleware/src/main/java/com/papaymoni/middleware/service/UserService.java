@@ -1,8 +1,10 @@
 package com.papaymoni.middleware.service;
 
+import com.papaymoni.middleware.dto.UserEventDto;
 import com.papaymoni.middleware.dto.UserRegistrationDto;
 import com.papaymoni.middleware.dto.UserProfileDto;
 import com.papaymoni.middleware.dto.UserRegistrationDto;
+import com.papaymoni.middleware.exception.ResourceNotFoundException;
 import com.papaymoni.middleware.model.User;
 
 import java.util.List;
@@ -112,4 +114,9 @@ public interface UserService {
      * @return the user profile DTO
      */
     UserProfileDto getUserProfileByUsername(String username);
+
+
+    // Add to UserService interface
+    UserEventDto getUserEventDtoById(Long id);
+
 }
