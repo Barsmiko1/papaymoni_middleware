@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -240,30 +241,46 @@ public class UserServiceImpl implements UserService {
         dto.setPhoneNumber(user.getPhoneNumber());
         dto.setReferralCode(user.getReferralCode());
 
-        // Use the injected VirtualAccountService instead
+        // Use the virtual account service to get accounts
         List<VirtualAccount> accounts = virtualAccountService.getUserVirtualAccounts(user);
+
+        // Convert accounts to DTOs without circular references
         if (accounts != null && !accounts.isEmpty()) {
-            dto.setVirtualAccount(accounts.get(0));
+            List<UserProfileDto.VirtualAccountDto> accountDtos = accounts.stream()
+                    .map(account -> {
+                        UserProfileDto.VirtualAccountDto accountDto = new UserProfileDto.VirtualAccountDto();
+                        accountDto.setId(account.getId());
+                        accountDto.setAccountNumber(account.getAccountNumber());
+                        accountDto.setBankCode(account.getBankCode());
+                        accountDto.setBankName(account.getBankName());
+                        accountDto.setAccountName(account.getAccountName());
+                        accountDto.setCurrency(account.getCurrency());
+                        accountDto.setActive(account.isActive());
+                        return accountDto;
+                    })
+                    .collect(Collectors.toList());
+
+            dto.setVirtualAccounts(accountDtos);
         }
 
         return dto;
     }
-
-    private UserProfileDto convertToDto(User user) {
-        UserProfileDto dto = new UserProfileDto();
-        dto.setId(user.getId());
-        dto.setUsername(user.getUsername());
-        dto.setEmail(user.getEmail());
-        dto.setFirstName(user.getFirstName());
-        dto.setLastName(user.getLastName());
-        dto.setPhoneNumber(user.getPhoneNumber());
-        dto.setReferralCode(user.getReferralCode());
-
-        if (user.getVirtualAccounts() != null && !user.getVirtualAccounts().isEmpty()) {
-            VirtualAccount firstAccount = user.getVirtualAccounts().iterator().next();
-            dto.setVirtualAccount(firstAccount);
-        }
-
-        return dto;
-    }
+//
+//    private UserProfileDto convertToDto(User user) {
+//        UserProfileDto dto = new UserProfileDto();
+//        dto.setId(user.getId());
+//        dto.setUsername(user.getUsername());
+//        dto.setEmail(user.getEmail());
+//        dto.setFirstName(user.getFirstName());
+//        dto.setLastName(user.getLastName());
+//        dto.setPhoneNumber(user.getPhoneNumber());
+//        dto.setReferralCode(user.getReferralCode());
+//
+//        if (user.getVirtualAccounts() != null && !user.getVirtualAccounts().isEmpty()) {
+//            VirtualAccount firstAccount = user.getVirtualAccounts().iterator().next();
+//            dto.setVirtualAccount(firstAccount);
+//        }
+//
+//        return dto;
+//    }
 }

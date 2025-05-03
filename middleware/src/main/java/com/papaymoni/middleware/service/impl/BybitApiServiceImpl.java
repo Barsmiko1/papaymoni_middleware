@@ -9,22 +9,33 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.codec.binary.Hex;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.*;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
+import org.springframework.retry.support.RetryTemplate;
+import org.springframework.retry.backoff.ExponentialBackOffPolicy;
+import org.springframework.retry.policy.SimpleRetryPolicy;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
 import javax.annotation.PostConstruct;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import java.net.SocketTimeoutException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 
 @Slf4j
 @Service
@@ -39,37 +50,99 @@ public class BybitApiServiceImpl implements BybitApiService {
     @Value("${bybit.api.read-timeout:30000}")
     private int readTimeout;
 
-    private final RestTemplate restTemplate;
-    private final ObjectMapper objectMapper;
+    @Value("${bybit.api.max-connections:200}")
+    private int maxConnections;
 
-    public BybitApiServiceImpl(RestTemplate restTemplate, ObjectMapper objectMapper) {
-        this.restTemplate = restTemplate;
+    @Value("${bybit.api.max-connections-per-route:20}")
+    private int maxConnectionsPerRoute;
+
+    @Value("${bybit.api.max-retries:3}")
+    private int maxRetries;
+
+    private final ObjectMapper objectMapper;
+    private RestTemplate restTemplate;
+    private RetryTemplate retryTemplate;
+
+    // Monitoring metrics
+    private final ConcurrentHashMap<String, AtomicInteger> endpointCalls = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicInteger> endpointErrors = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> endpointLatency = new ConcurrentHashMap<>();
+
+    public BybitApiServiceImpl(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
 
     @PostConstruct
     public void init() {
-        // Configure timeout settings for RestTemplate using SimpleClientHttpRequestFactory
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(connectTimeout);
-        factory.setReadTimeout(readTimeout);
+        // Configure connection pool manager
+        PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
+        connectionManager.setMaxTotal(maxConnections);
+        connectionManager.setDefaultMaxPerRoute(maxConnectionsPerRoute);
+        connectionManager.setValidateAfterInactivity(10000); // Validate connections after 10 seconds of inactivity
 
-        restTemplate.setRequestFactory(factory);
+        // Configure timeouts and connection request timeout
+        RequestConfig requestConfig = RequestConfig.custom()
+                .setConnectTimeout(connectTimeout)
+                .setSocketTimeout(readTimeout)
+                .setConnectionRequestTimeout(5000) // Timeout for getting a connection from the pool
+                .build();
+
+        // Build HTTP client with connection pooling and timeout configuration
+        CloseableHttpClient httpClient = HttpClientBuilder.create()
+                .setConnectionManager(connectionManager)
+                .setDefaultRequestConfig(requestConfig)
+                .setKeepAliveStrategy((response, context) -> 30 * 1000) // Keep connections alive for 30 seconds
+                .build();
+
+        // Create and configure RestTemplate with the HTTP client
+        HttpComponentsClientHttpRequestFactory requestFactory = new HttpComponentsClientHttpRequestFactory(httpClient);
+        restTemplate = new RestTemplate(requestFactory);
+
+        // Configure retry template
+        retryTemplate = new RetryTemplate();
+
+        // Configure exponential backoff for retries
+        ExponentialBackOffPolicy backOffPolicy = new ExponentialBackOffPolicy();
+        backOffPolicy.setInitialInterval(500);
+        backOffPolicy.setMultiplier(2.0);
+        backOffPolicy.setMaxInterval(10000);
+        retryTemplate.setBackOffPolicy(backOffPolicy);
+
+        // Configure retry policy - retry on network and server errors, but not on client errors
+        Map<Class<? extends Throwable>, Boolean> retryableExceptions = new HashMap<>();
+        retryableExceptions.put(ResourceAccessException.class, true);
+        retryableExceptions.put(SocketTimeoutException.class, true);
+        retryableExceptions.put(HttpServerErrorException.class, true);
+        // Don't retry on client errors (4xx)
+        retryableExceptions.put(HttpClientErrorException.class, false);
+
+        SimpleRetryPolicy retryPolicy = new SimpleRetryPolicy(maxRetries, retryableExceptions);
+        retryTemplate.setRetryPolicy(retryPolicy);
 
         // Log configuration
-        log.info("Initialized BybitApiService with baseUrl: {}, connectTimeout: {}ms, readTimeout: {}ms",
-                baseUrl, connectTimeout, readTimeout);
+        log.info("Initialized BybitApiService with baseUrl: {}, connectTimeout: {}ms, readTimeout: {}ms, " +
+                        "maxConnections: {}, maxConnectionsPerRoute: {}, maxRetries: {}",
+                baseUrl, connectTimeout, readTimeout, maxConnections, maxConnectionsPerRoute, maxRetries);
     }
 
     @Override
+    @Retryable(value = {ResourceAccessException.class, HttpServerErrorException.class},
+            maxAttempts = 3,
+            backoff = @Backoff(delay = 500, multiplier = 2, maxDelay = 10000))
     public <T> BybitApiResponse<T> executeRequest(String endpoint, String method, Object payload,
                                                   BybitCredentials credentials, Class<T> responseType) {
+        final String fullUrl = baseUrl + endpoint;
+        final String endpointKey = method + ":" + endpoint;
+
+        // Track requests
+        endpointCalls.computeIfAbsent(endpointKey, k -> new AtomicInteger(0)).incrementAndGet();
+        long startTime = System.currentTimeMillis();
+
         try {
             HttpHeaders headers = createHeaders(credentials, payload);
             HttpEntity<?> entity = new HttpEntity<>(payload, headers);
 
-            String url = baseUrl + endpoint;
-            log.info("Making {} request to Bybit API: {}", method, url);
+            log.debug("Making {} request to Bybit API: {}", method, fullUrl);
 
             if (payload != null) {
                 try {
@@ -79,18 +152,23 @@ public class BybitApiServiceImpl implements BybitApiService {
                 }
             }
 
-            ResponseEntity<BybitApiResponse<T>> response;
-            if ("GET".equals(method)) {
-                response = restTemplate.exchange(url, HttpMethod.GET, entity,
-                        new ParameterizedTypeReference<BybitApiResponse<T>>() {});
-            } else {
-                response = restTemplate.exchange(url, HttpMethod.POST, entity,
-                        new ParameterizedTypeReference<BybitApiResponse<T>>() {});
-            }
+            return retryTemplate.execute(context -> {
+                ResponseEntity<BybitApiResponse<T>> response;
+                if ("GET".equals(method)) {
+                    response = restTemplate.exchange(fullUrl, HttpMethod.GET, entity,
+                            new org.springframework.core.ParameterizedTypeReference<BybitApiResponse<T>>() {});
+                } else {
+                    response = restTemplate.exchange(fullUrl, HttpMethod.POST, entity,
+                            new org.springframework.core.ParameterizedTypeReference<BybitApiResponse<T>>() {});
+                }
 
-            log.info("Received response from Bybit API with status: {}", response.getStatusCode());
-            return response.getBody();
+                log.debug("Received response from Bybit API with status: {}", response.getStatusCode());
+                return response.getBody();
+            });
         } catch (ResourceAccessException e) {
+            // Track errors
+            endpointErrors.computeIfAbsent(endpointKey, k -> new AtomicInteger(0)).incrementAndGet();
+
             log.error("Network error accessing Bybit API (endpoint: {}): {}", endpoint, e.getMessage(), e);
             BybitApiResponse<T> errorResponse = new BybitApiResponse<>();
             errorResponse.setRetCode(-1);
@@ -98,18 +176,30 @@ public class BybitApiServiceImpl implements BybitApiService {
             errorResponse.setTimeNow(String.valueOf(System.currentTimeMillis()));
             return errorResponse;
         } catch (Exception e) {
+            // Track errors
+            endpointErrors.computeIfAbsent(endpointKey, k -> new AtomicInteger(0)).incrementAndGet();
+
             log.error("Error executing Bybit API request (endpoint: {}): {}", endpoint, e.getMessage(), e);
             BybitApiResponse<T> errorResponse = new BybitApiResponse<>();
             errorResponse.setRetCode(-1);
             errorResponse.setRetMsg("Error: " + e.getMessage());
             errorResponse.setTimeNow(String.valueOf(System.currentTimeMillis()));
             return errorResponse;
+        } finally {
+            // Track latency
+            endpointLatency.put(endpointKey, System.currentTimeMillis() - startTime);
         }
     }
 
     private HttpHeaders createHeaders(BybitCredentials credentials, Object payload) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+
+        // Protect against null credentials
+        if (credentials == null || credentials.getApiKey() == null || credentials.getApiSecret() == null) {
+            log.warn("Missing credentials or API key/secret");
+            return headers;
+        }
 
         long timestamp = System.currentTimeMillis();
         String signature = generateSignature(credentials.getApiSecret(), timestamp, payload);
@@ -167,7 +257,7 @@ public class BybitApiServiceImpl implements BybitApiService {
     }
 
     @Override
-// Use API key as cache key instead of credentials.id which might be null
+    // Use API key as cache key instead of credentials.id which might be null
     @Cacheable(value = "credentialsVerification", key = "#credentials.apiKey != null ? #credentials.apiKey : 'temp'")
     public boolean verifyCredentials(BybitCredentials credentials) {
         if (credentials == null || credentials.getApiKey() == null || credentials.getApiSecret() == null) {
@@ -198,7 +288,6 @@ public class BybitApiServiceImpl implements BybitApiService {
             return false;
         }
     }
-
     @Override
     public BybitApiResponse<?> getAds(String tokenId, String currencyId, String side, BybitCredentials credentials) {
         Map<String, String> payload = new HashMap<>();
@@ -310,5 +399,42 @@ public class BybitApiServiceImpl implements BybitApiService {
         response.setResult(result);
 
         return response;
+
+    }
+
+    // Implementation for more specific API methods
+
+    /**
+     * Get API service health metrics
+     * @return Map containing health metrics
+     */
+    public Map<String, Object> getServiceHealth() {
+        Map<String, Object> healthInfo = new HashMap<>();
+
+        // Copy metrics data atomically to avoid concurrent modification issues
+        Map<String, Integer> callCounts = new HashMap<>();
+        for (Map.Entry<String, AtomicInteger> entry : endpointCalls.entrySet()) {
+            callCounts.put(entry.getKey(), entry.getValue().get());
+        }
+
+        Map<String, Integer> errorCounts = new HashMap<>();
+        for (Map.Entry<String, AtomicInteger> entry : endpointErrors.entrySet()) {
+            errorCounts.put(entry.getKey(), entry.getValue().get());
+        }
+
+        healthInfo.put("endpointCalls", callCounts);
+        healthInfo.put("endpointErrors", errorCounts);
+        healthInfo.put("endpointLatency", new HashMap<>(endpointLatency));
+
+        return healthInfo;
+    }
+
+    /**
+     * Reset monitoring metrics (for testing or monitoring purposes)
+     */
+    public void resetMetrics() {
+        endpointCalls.clear();
+        endpointErrors.clear();
+        endpointLatency.clear();
     }
 }

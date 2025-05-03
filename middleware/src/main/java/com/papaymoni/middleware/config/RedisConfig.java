@@ -21,6 +21,7 @@ import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettucePoolingClientConfiguration;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.Jackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
@@ -80,23 +81,11 @@ public class RedisConfig {
         RedisTemplate<String, Object> template = new RedisTemplate<>();
         template.setConnectionFactory(connectionFactory);
 
-        // Use Jackson2JsonRedisSerializer for both values and hash values
-        Jackson2JsonRedisSerializer<Object> jackson2JsonRedisSerializer = new Jackson2JsonRedisSerializer<>(Object.class);
-        ObjectMapper om = new ObjectMapper();
-        om.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
-        om.enableDefaultTyping(ObjectMapper.DefaultTyping.NON_FINAL);
-        om.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        // Use GenericJackson2JsonRedisSerializer instead of Jackson2JsonRedisSerializer
+        GenericJackson2JsonRedisSerializer genericJackson2JsonRedisSerializer = new GenericJackson2JsonRedisSerializer();
 
-        // Important: Configure object mapper to handle cycles in object graph
-        om.configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false);
-        om.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        om.registerModule(new JavaTimeModule());
-        om.setSerializationInclusion(JsonInclude.Include.NON_NULL);
-
-        jackson2JsonRedisSerializer.setObjectMapper(om);
-
-        template.setValueSerializer(jackson2JsonRedisSerializer);
-        template.setHashValueSerializer(jackson2JsonRedisSerializer);
+        template.setValueSerializer(genericJackson2JsonRedisSerializer);
+        template.setHashValueSerializer(genericJackson2JsonRedisSerializer);
 
         StringRedisSerializer stringRedisSerializer = new StringRedisSerializer();
         template.setKeySerializer(stringRedisSerializer);
@@ -104,25 +93,30 @@ public class RedisConfig {
 
         template.afterPropertiesSet();
         return template;
+
     }
 
     @Bean
     public CacheManager cacheManager(RedisConnectionFactory connectionFactory) {
-        // Configure serializers with Java 8 date/time support
+        // Configure ObjectMapper with type information for caching
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
         objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         objectMapper.disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
-        Jackson2JsonRedisSerializer<Object> jsonSerializer =
-                new Jackson2JsonRedisSerializer<>(Object.class);
-        jsonSerializer.setObjectMapper(objectMapper);
+        // IMPORTANT: Enable default typing to include type information
+        objectMapper.enableDefaultTyping(ObjectMapper.DefaultTyping.NON_FINAL);
+        objectMapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
+        objectMapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
+
+        // Use GenericJackson2JsonRedisSerializer which includes type information
+        GenericJackson2JsonRedisSerializer genericSerializer = new GenericJackson2JsonRedisSerializer(objectMapper);
 
         // Default cache configuration
         RedisCacheConfiguration defaultCacheConfig = RedisCacheConfiguration.defaultCacheConfig()
                 .entryTtl(Duration.ofMinutes(30))
                 .serializeKeysWith(RedisSerializationContext.SerializationPair.fromSerializer(new StringRedisSerializer()))
-                .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(jsonSerializer))
+                .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(genericSerializer))
                 .disableCachingNullValues()
                 .prefixCacheNameWith("papaymoni:"); // Add namespace to prevent conflicts
 
@@ -150,6 +144,11 @@ public class RedisConfig {
         cacheConfigurations.put("bybitApiResponses", defaultCacheConfig.entryTtl(Duration.ofSeconds(30)));
         cacheConfigurations.put("credentialsVerification", defaultCacheConfig.entryTtl(Duration.ofHours(1)));
         cacheConfigurations.put("personalAds", defaultCacheConfig.entryTtl(Duration.ofMinutes(5)));
+
+        // Virtual Account caches - IMPORTANT: Add these configurations
+        cacheConfigurations.put("virtualAccountById", defaultCacheConfig.entryTtl(Duration.ofMinutes(10)));
+        cacheConfigurations.put("virtualAccountByNumber", defaultCacheConfig.entryTtl(Duration.ofMinutes(10)));
+        cacheConfigurations.put("virtualAccountCreations", defaultCacheConfig.entryTtl(Duration.ofMinutes(5)));
 
         return RedisCacheManager.builder(connectionFactory)
                 .cacheDefaults(defaultCacheConfig)

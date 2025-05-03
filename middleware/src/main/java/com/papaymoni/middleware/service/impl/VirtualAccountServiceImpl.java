@@ -1,6 +1,6 @@
 package com.papaymoni.middleware.service.impl;
 
-import com.papaymoni.middleware.dto.VirtualAccountResponse;
+import com.papaymoni.middleware.dto.VirtualAccountResponseDto;
 import com.papaymoni.middleware.exception.ResourceNotFoundException;
 import com.papaymoni.middleware.model.User;
 import com.papaymoni.middleware.model.VirtualAccount;
@@ -12,10 +12,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.dao.DataAccessException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -23,6 +27,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 @Slf4j
@@ -32,64 +38,81 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
     private final PalmpayStaticVirtualAccountService palmpayStaticVirtualAccountService;
     private final EncryptionService encryptionService;
     private final CacheManager cacheManager;
+    private final TransactionTemplate transactionTemplate;
 
     // Cache names
     private static final String USER_ACCOUNTS_CACHE = "userVirtualAccounts";
     private static final String ACCOUNT_CACHE = "virtualAccountById";
     private static final String ACCOUNT_NUMBER_CACHE = "virtualAccountByNumber";
 
+    // Metrics for monitoring
+    private final ConcurrentHashMap<String, AtomicInteger> operationCounts = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicInteger> operationErrors = new ConcurrentHashMap<>();
+
     public VirtualAccountServiceImpl(
             VirtualAccountRepository virtualAccountRepository,
             PalmpayStaticVirtualAccountService palmpayStaticVirtualAccountService,
             EncryptionService encryptionService,
-            CacheManager cacheManager) {
+            CacheManager cacheManager,
+            TransactionTemplate transactionTemplate) {
         this.virtualAccountRepository = virtualAccountRepository;
         this.palmpayStaticVirtualAccountService = palmpayStaticVirtualAccountService;
         this.encryptionService = encryptionService;
         this.cacheManager = cacheManager;
+        this.transactionTemplate = transactionTemplate;
+
+        // Initialize operation counters
+        operationCounts.put("getUserAccounts", new AtomicInteger(0));
+        operationCounts.put("createAccount", new AtomicInteger(0));
+        operationCounts.put("updateBalance", new AtomicInteger(0));
+        operationCounts.put("getAccountById", new AtomicInteger(0));
+        operationCounts.put("getAccountByNumber", new AtomicInteger(0));
+
+        operationErrors.put("getUserAccounts", new AtomicInteger(0));
+        operationErrors.put("createAccount", new AtomicInteger(0));
+        operationErrors.put("updateBalance", new AtomicInteger(0));
+        operationErrors.put("getAccountById", new AtomicInteger(0));
+        operationErrors.put("getAccountByNumber", new AtomicInteger(0));
     }
 
     @Override
     @Cacheable(value = USER_ACCOUNTS_CACHE, key = "#user.id", unless = "#result == null")
-    @Transactional(readOnly = true)  // Add this annotation
+    @Transactional(readOnly = true)
     public List<VirtualAccount> getUserVirtualAccounts(User user) {
+        operationCounts.get("getUserAccounts").incrementAndGet();
         log.debug("Fetching virtual accounts for user ID: {}", user.getId());
 
-        // Use userId instead of the full User object to avoid serialization issues
-        Long userId = user.getId();
-        return virtualAccountRepository.findByUserId(userId);
+        try {
+            // Use the improved method with JOIN FETCH to avoid N+1 queries
+            return virtualAccountRepository.findByUserIdWithUser(user.getId());
+        } catch (Exception e) {
+            operationErrors.get("getUserAccounts").incrementAndGet();
+            log.error("Error fetching virtual accounts for user: {}", user.getId(), e);
+            throw e;
+        }
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.READ_COMMITTED)
     @CacheEvict(value = USER_ACCOUNTS_CACHE, key = "#user.id")
     public VirtualAccount createVirtualAccount(User user, String currency) {
+        operationCounts.get("createAccount").incrementAndGet();
         log.info("Creating new virtual account for user ID: {} with currency: {}", user.getId(), currency);
 
-        // Check if BVN is verified
-        if (!user.isBvnVerified()) {
-            log.warn("Cannot create virtual account - BVN not verified for user: {}", user.getId());
-            throw new IllegalStateException("BVN verification is required to create a virtual account");
-        }
-
-        // Get decrypted BVN (if encrypted)
-        String bvn;
         try {
-            if (user.getBvn() != null && user.getBvn().startsWith("ENC:")) {
-                bvn = encryptionService.decrypt(user.getBvn().substring(4));
-            } else {
-                bvn = user.getBvn();
+            // Check if BVN is verified
+            if (!user.isBvnVerified()) {
+                log.warn("Cannot create virtual account - BVN not verified for user: {}", user.getId());
+                throw new IllegalStateException("BVN verification is required to create a virtual account");
             }
-        } catch (Exception e) {
-            log.error("Error decrypting BVN for user: {}", user.getId(), e);
-            throw new IllegalStateException("Failed to access BVN information");
-        }
 
-        try {
+            // Get decrypted BVN (if encrypted)
+            String bvn = getBvnSafely(user);
+
             // Call PalmpayStaticVirtualAccountService
-            VirtualAccountResponse response = palmpayStaticVirtualAccountService.createVirtualAccount(user, currency);
+            VirtualAccountResponseDto response = palmpayStaticVirtualAccountService.createVirtualAccount(user, currency);
 
-            // Create new virtual account entity
+            // Create new virtual account entity within transaction
             VirtualAccount virtualAccount = new VirtualAccount();
             virtualAccount.setUser(user);
             virtualAccount.setAccountNumber(response.getAccountNumber());
@@ -108,123 +131,91 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
 
             log.info("Created virtual account: {} for user: {}", savedAccount.getAccountNumber(), user.getId());
             return savedAccount;
-
         } catch (IOException e) {
-            log.error("Failed to create virtual account for user: {}", user.getId(), e);
-            throw new RuntimeException("Failed to create virtual account: " + e.getMessage());
+            operationErrors.get("createAccount").incrementAndGet();
+            log.error("Error from Palmpay service while creating virtual account for user: {}", user.getId(), e);
+            throw new RuntimeException("Failed to create virtual account: " + e.getMessage(), e);
+        } catch (Exception e) {
+            operationErrors.get("createAccount").incrementAndGet();
+            log.error("Unexpected error creating virtual account for user: {}", user.getId(), e);
+            throw new RuntimeException("Failed to create virtual account due to an unexpected error", e);
         }
     }
 
     /**
-     * Disable a virtual account
-     * @param account The account to disable
-     * @return true if successful
+     * Safely get and decrypt BVN from user
+     * @param user The user to get BVN from
+     * @return Decrypted BVN
      */
-    @Transactional
-    public boolean disableVirtualAccount(VirtualAccount account) {
-        try {
-            boolean success = palmpayStaticVirtualAccountService.updateVirtualAccountStatus(
-                    account.getAccountNumber(), "Disabled");
-
-            if (success) {
-                account.setActive(false);
-                account.setUpdatedAt(LocalDateTime.now());
-                virtualAccountRepository.save(account);
-
-                // Update cache
-                updateAccountCache(account);
-
-                log.info("Disabled virtual account: {}", account.getAccountNumber());
-            }
-
-            return success;
-        } catch (IOException e) {
-            log.error("Failed to disable virtual account: {}", account.getAccountNumber(), e);
-            throw new RuntimeException("Failed to disable virtual account: " + e.getMessage());
+    private String getBvnSafely(User user) {
+        if (user.getBvn() == null) {
+            throw new IllegalArgumentException("User does not have a BVN");
         }
-    }
 
-    /**
-     * Enable a virtual account
-     * @param account The account to enable
-     * @return true if successful
-     */
-    @Transactional
-    public boolean enableVirtualAccount(VirtualAccount account) {
         try {
-            boolean success = palmpayStaticVirtualAccountService.updateVirtualAccountStatus(
-                    account.getAccountNumber(), "Enabled");
-
-            if (success) {
-                account.setActive(true);
-                account.setUpdatedAt(LocalDateTime.now());
-                virtualAccountRepository.save(account);
-
-                // Update cache
-                updateAccountCache(account);
-
-                log.info("Enabled virtual account: {}", account.getAccountNumber());
+            if (user.getBvn().startsWith("ENC:")) {
+                return encryptionService.decrypt(user.getBvn());
+            } else {
+                return user.getBvn();
             }
-
-            return success;
-        } catch (IOException e) {
-            log.error("Failed to enable virtual account: {}", account.getAccountNumber(), e);
-            throw new RuntimeException("Failed to enable virtual account: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Delete a virtual account
-     * @param account The account to delete
-     * @return true if successful
-     */
-    @Transactional
-    public boolean deleteVirtualAccount(VirtualAccount account) {
-        try {
-            boolean success = palmpayStaticVirtualAccountService.deleteVirtualAccount(
-                    account.getAccountNumber());
-
-            if (success) {
-                // Remove from cache before deleting
-                evictAccountFromCache(account);
-
-                // Delete from database
-                virtualAccountRepository.delete(account);
-
-                log.info("Deleted virtual account: {}", account.getAccountNumber());
-            }
-
-            return success;
-        } catch (IOException e) {
-            log.error("Failed to delete virtual account: {}", account.getAccountNumber(), e);
-            throw new RuntimeException("Failed to delete virtual account: " + e.getMessage());
+        } catch (Exception e) {
+            log.error("Error decrypting BVN for user: {}", user.getId(), e);
+            throw new IllegalStateException("Failed to access BVN information", e);
         }
     }
 
     @Override
     @Cacheable(value = ACCOUNT_CACHE, key = "#id")
+    @Transactional(readOnly = true)
     public VirtualAccount getVirtualAccountById(Long id) {
+        operationCounts.get("getAccountById").incrementAndGet();
         log.debug("Fetching virtual account by ID: {}", id);
-        return virtualAccountRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Virtual account not found with id: " + id));
+
+        try {
+            return virtualAccountRepository.findById(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("Virtual account not found with id: " + id));
+        } catch (ResourceNotFoundException e) {
+            throw e;
+        } catch (Exception e) {
+            operationErrors.get("getAccountById").incrementAndGet();
+            log.error("Error fetching virtual account by ID: {}", id, e);
+            throw e;
+        }
     }
 
     @Override
     @Cacheable(value = ACCOUNT_NUMBER_CACHE, key = "#accountNumber")
+    @Transactional(readOnly = true)
     public VirtualAccount getVirtualAccountByAccountNumber(String accountNumber) {
+        operationCounts.get("getAccountByNumber").incrementAndGet();
         log.debug("Fetching virtual account by account number: {}", accountNumber);
-        return virtualAccountRepository.findByAccountNumber(accountNumber)
-                .orElseThrow(() -> new ResourceNotFoundException("Virtual account not found with account number: " + accountNumber));
+
+        try {
+            // Use the improved method with JOIN FETCH to avoid N+1 queries
+            return virtualAccountRepository.findByAccountNumberWithUser(accountNumber)
+                    .orElseThrow(() -> new ResourceNotFoundException("Virtual account not found with account number: " + accountNumber));
+        } catch (ResourceNotFoundException e) {
+            throw e;
+        } catch (Exception e) {
+            operationErrors.get("getAccountByNumber").incrementAndGet();
+            log.error("Error fetching virtual account by account number: {}", accountNumber, e);
+            throw e;
+        }
     }
 
     @Override
     @Cacheable(value = USER_ACCOUNTS_CACHE, key = "#user.id + '-' + #currency", unless = "#result == null")
-    @Transactional(readOnly = true)  // Add this annotation
+    @Transactional(readOnly = true)
     public List<VirtualAccount> getUserVirtualAccountsByCurrency(User user, String currency) {
         log.debug("Fetching virtual accounts for user ID: {} with currency: {}", user.getId(), currency);
 
-        // Use the query that takes userId and currency
-        return virtualAccountRepository.findByUserIdAndCurrency(user.getId(), currency);
+        try {
+            // Use the improved method with JOIN FETCH to avoid N+1 queries
+            return virtualAccountRepository.findByUserIdAndCurrencyWithUser(user.getId(), currency);
+        } catch (Exception e) {
+            log.error("Error fetching virtual accounts by currency for user: {}", user.getId(), e);
+            throw e;
+        }
     }
 
     /**
@@ -233,6 +224,7 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
      * @param currency Currency of the account
      * @return CompletableFuture containing the created virtual account
      */
+    @Override
     @Async
     public CompletableFuture<VirtualAccount> createVirtualAccountAsync(User user, String currency) {
         return CompletableFuture.supplyAsync(() -> {
@@ -246,28 +238,51 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
     }
 
     /**
-     * Update account balances in bulk
+     * Update account balances in bulk with proper transaction management
      * @param accountUpdates Map of account IDs to new balances
      */
-    @Transactional
+    @Override
+    @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.SERIALIZABLE)
     public void updateAccountBalances(Map<Long, BigDecimal> accountUpdates) {
         log.info("Bulk updating balances for {} accounts", accountUpdates.size());
 
-        List<VirtualAccount> accounts = virtualAccountRepository.findAllById(accountUpdates.keySet());
-        LocalDateTime now = LocalDateTime.now();
+        try {
+            List<VirtualAccount> accounts = virtualAccountRepository.findAllById(accountUpdates.keySet());
+            LocalDateTime now = LocalDateTime.now();
 
-        accounts.forEach(account -> {
-            BigDecimal newBalance = accountUpdates.get(account.getId());
-            if (newBalance != null) {
-                account.setBalance(newBalance);
-                account.setUpdatedAt(now);
+            // Pre-validate all updates before making changes
+            for (VirtualAccount account : accounts) {
+                BigDecimal newBalance = accountUpdates.get(account.getId());
+                if (newBalance == null) {
+                    log.warn("Account ID {} included in update but no balance provided", account.getId());
+                    continue;
+                }
+
+                if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
+                    throw new IllegalArgumentException("Cannot set negative balance for account: " + account.getId());
+                }
             }
-        });
 
-        virtualAccountRepository.saveAll(accounts);
+            // Apply updates after validation
+            for (VirtualAccount account : accounts) {
+                BigDecimal newBalance = accountUpdates.get(account.getId());
+                if (newBalance != null) {
+                    account.setBalance(newBalance);
+                    account.setUpdatedAt(now);
+                }
+            }
 
-        // Update cache for each account
-        accounts.forEach(this::updateAccountCache);
+            // Save all changes in a single transaction
+            List<VirtualAccount> savedAccounts = virtualAccountRepository.saveAll(accounts);
+
+            // Update cache for each account after successful transaction
+            savedAccounts.forEach(this::updateAccountCache);
+
+            log.info("Successfully updated balances for {} accounts", savedAccounts.size());
+        } catch (Exception e) {
+            log.error("Error during bulk account balance update", e);
+            throw e; // Re-throw to trigger transaction rollback
+        }
     }
 
     /**
@@ -277,47 +292,163 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
     public void refreshVirtualAccountStatus() {
         log.info("Running scheduled virtual account refresh");
 
-        // In a real implementation, this would check account statuses with Palmpay
-        // For now, we'll just log
-        log.info("Virtual account refresh completed");
+        try {
+            // In a real implementation, this would check account statuses with Palmpay
+            // For now, we'll just log
+            log.info("Virtual account refresh completed");
+        } catch (Exception e) {
+            log.error("Error during scheduled virtual account refresh", e);
+        }
     }
 
     /**
-     * Update account balance
+     * Update account balance with proper transaction management
      * @param account The account to update
      * @param newBalance The new balance
      * @return The updated account
      */
-    @Transactional
+    @Override
+    @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.SERIALIZABLE)
     public VirtualAccount updateAccountBalance(VirtualAccount account, BigDecimal newBalance) {
-        account.setBalance(newBalance);
-        account.setUpdatedAt(LocalDateTime.now());
+        operationCounts.get("updateBalance").incrementAndGet();
 
-        VirtualAccount updatedAccount = virtualAccountRepository.save(account);
-        updateAccountCache(updatedAccount);
+        // Validate inputs
+        if (account == null) {
+            throw new IllegalArgumentException("Account cannot be null");
+        }
 
-        log.info("Updated balance for account: {} to: {}", account.getAccountNumber(), newBalance);
-        return updatedAccount;
+        if (newBalance == null) {
+            throw new IllegalArgumentException("Balance cannot be null");
+        }
+
+        if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalArgumentException("Balance cannot be negative");
+        }
+
+        log.info("Updating balance for account ID: {} from {} to {}",
+                account.getId(), account.getBalance(), newBalance);
+
+        try {
+            // Re-fetch account to ensure we have the most recent version
+            VirtualAccount currentAccount = virtualAccountRepository.findById(account.getId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Account not found: " + account.getId()));
+
+            // Update the balance
+            currentAccount.setBalance(newBalance);
+            currentAccount.setUpdatedAt(LocalDateTime.now());
+
+            // Save changes
+            VirtualAccount updatedAccount = virtualAccountRepository.save(currentAccount);
+
+            // Update cache after successful transaction
+            updateAccountCache(updatedAccount);
+
+            log.info("Successfully updated balance for account: {}", updatedAccount.getAccountNumber());
+            return updatedAccount;
+        } catch (ResourceNotFoundException e) {
+            throw e;
+        } catch (Exception e) {
+            operationErrors.get("updateBalance").incrementAndGet();
+            log.error("Error updating balance for account: {}", account.getId(), e);
+            throw new RuntimeException("Failed to update account balance", e);
+        }
     }
 
     /**
-     * Helper method to update account in all caches
+     * Helper method to update account in all caches with retry logic
      */
     private void updateAccountCache(VirtualAccount account) {
-        cacheManager.getCache(ACCOUNT_CACHE).put(account.getId(), account);
-        cacheManager.getCache(ACCOUNT_NUMBER_CACHE).put(account.getAccountNumber(), account);
-        // We'll evict the user accounts cache to force a refresh
-        cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId());
-        cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId() + "-" + account.getCurrency());
+        try {
+            // Retry up to 3 times to ensure cache is updated
+            int maxRetries = 3;
+            for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    cacheManager.getCache(ACCOUNT_CACHE).put(account.getId(), account);
+                    cacheManager.getCache(ACCOUNT_NUMBER_CACHE).put(account.getAccountNumber(), account);
+                    // We'll evict the user accounts cache to force a refresh
+                    cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId());
+                    cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId() + "-" + account.getCurrency());
+                    return;
+                } catch (Exception e) {
+                    if (attempt == maxRetries) {
+                        throw e;
+                    }
+                    log.warn("Cache update failed (attempt {}), retrying...", attempt, e);
+                    Thread.sleep(100 * attempt);
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to update cache for account: {}", account.getId(), e);
+            // Continue execution - cache failure shouldn't stop business operations
+        }
     }
 
     /**
-     * Helper method to evict account from all caches
+     * Helper method to evict account from all caches with retry logic
      */
     private void evictAccountFromCache(VirtualAccount account) {
-        cacheManager.getCache(ACCOUNT_CACHE).evict(account.getId());
-        cacheManager.getCache(ACCOUNT_NUMBER_CACHE).evict(account.getAccountNumber());
-        cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId());
-        cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId() + "-" + account.getCurrency());
+        try {
+            // Retry up to 3 times to ensure cache is evicted
+            int maxRetries = 3;
+            for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    cacheManager.getCache(ACCOUNT_CACHE).evict(account.getId());
+                    cacheManager.getCache(ACCOUNT_NUMBER_CACHE).evict(account.getAccountNumber());
+                    cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId());
+                    cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId() + "-" + account.getCurrency());
+                    return;
+                } catch (Exception e) {
+                    if (attempt == maxRetries) {
+                        throw e;
+                    }
+                    log.warn("Cache eviction failed (attempt {}), retrying...", attempt, e);
+                    Thread.sleep(100 * attempt);
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to evict cache for account: {}", account.getId(), e);
+            // Continue execution - cache failure shouldn't stop business operations
+        }
+    }
+
+    /**
+     * Get account count for health checks
+     * @return Count of accounts
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public long getAccountCount() {
+        try {
+            return virtualAccountRepository.count();
+        } catch (DataAccessException e) {
+            log.error("Error getting account count", e);
+            return -1; // Indicate error
+        }
+    }
+
+    /**
+     * Get service metrics for monitoring
+     * @return Map containing operation counts and errors
+     */
+    public Map<String, Object> getServiceMetrics() {
+        Map<String, Object> metrics = new ConcurrentHashMap<>();
+
+        // Copy operation counts to avoid concurrent modification
+        Map<String, Integer> counts = new ConcurrentHashMap<>();
+        for (Map.Entry<String, AtomicInteger> entry : operationCounts.entrySet()) {
+            counts.put(entry.getKey(), entry.getValue().get());
+        }
+
+        // Copy error counts
+        Map<String, Integer> errors = new ConcurrentHashMap<>();
+        for (Map.Entry<String, AtomicInteger> entry : operationErrors.entrySet()) {
+            errors.put(entry.getKey(), entry.getValue().get());
+        }
+
+        metrics.put("operationCounts", counts);
+        metrics.put("operationErrors", errors);
+        metrics.put("accountCount", getAccountCount());
+
+        return metrics;
     }
 }

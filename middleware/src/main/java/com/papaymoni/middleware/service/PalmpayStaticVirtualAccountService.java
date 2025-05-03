@@ -1,6 +1,6 @@
 package com.papaymoni.middleware.service;
 
-import com.papaymoni.middleware.dto.VirtualAccountResponse;
+import com.papaymoni.middleware.dto.VirtualAccountResponseDto;
 import com.papaymoni.middleware.model.User;
 
 import java.io.IOException;
@@ -17,7 +17,7 @@ public interface PalmpayStaticVirtualAccountService {
      * @return VirtualAccountResponse with account details
      * @throws IOException If there's an error communicating with Palmpay Gateway
      */
-    VirtualAccountResponse createVirtualAccount(User user, String currency) throws IOException;
+    VirtualAccountResponseDto createVirtualAccount(User user, String currency) throws IOException;
 
     /**
      * Update the status of a virtual account
@@ -42,7 +42,7 @@ public interface PalmpayStaticVirtualAccountService {
      * @return VirtualAccountResponse with account details
      * @throws IOException If there's an error communicating with Palmpay Gateway
      */
-    VirtualAccountResponse queryVirtualAccount(String virtualAccountNo) throws IOException;
+    VirtualAccountResponseDto queryVirtualAccount(String virtualAccountNo) throws IOException;
 
     /**
      * Check if the Palmpay Gateway API is available

@@ -3,6 +3,8 @@ package com.papaymoni.middleware.service;
 import com.papaymoni.middleware.dto.BybitApiResponse;
 import com.papaymoni.middleware.model.BybitCredentials;
 
+import java.util.Map;
+
 public interface BybitApiService {
     /**
      * Test basic connectivity to Bybit API
@@ -24,4 +26,15 @@ public interface BybitApiService {
     BybitApiResponse<?> releaseAssets(String orderId, BybitCredentials credentials);
     BybitApiResponse<?> sendChatMessage(String message, String contentType, String orderId, BybitCredentials credentials);
     BybitApiResponse<?> uploadChatFile(byte[] fileData, String filename, String orderId, BybitCredentials credentials);
+
+    /**
+     * Get API service health metrics
+     * @return Map containing health metrics
+     */
+    Map<String, Object> getServiceHealth();
+
+    /**
+     * Reset monitoring metrics (for testing or monitoring purposes)
+     */
+    void resetMetrics();
 }

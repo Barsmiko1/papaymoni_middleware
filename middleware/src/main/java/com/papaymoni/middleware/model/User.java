@@ -1,6 +1,7 @@
 package com.papaymoni.middleware.model;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonManagedReference;
 import lombok.Data;
 
 import javax.persistence.*;
@@ -15,6 +16,7 @@ public class User {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+    private Long Userid;
 
     @Column(unique = true, nullable = false)
     private String username;
@@ -23,6 +25,7 @@ public class User {
     private String email;
 
     @Column(nullable = false)
+    @JsonIgnore
     private String password;
 
     private String firstName;
@@ -32,18 +35,18 @@ public class User {
     private boolean phoneVerified;
 
     @Column(unique = true)
+    @JsonIgnore
     private String bvn;
+
     private LocalDate dateOfBirth;
-
     private String gender;
-
     private boolean bvnVerified;
-
     private String referralCode;
     private String referredBy;
 
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    @JsonIgnoreProperties("user")  // Add this annotation
+    @JsonManagedReference
+    @JsonIgnore
     private Set<VirtualAccount> virtualAccounts;
 
     private LocalDateTime createdAt;

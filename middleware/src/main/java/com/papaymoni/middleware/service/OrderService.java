@@ -19,4 +19,10 @@ public interface OrderService {
     void sendOrderMessage(String orderId, String message);
     void uploadOrderReceipt(String orderId, byte[] receiptData, String filename);
     void cancelOrder(String orderId);
+
+    /**
+     * Get total count of orders in the system
+     * @return Count of orders
+     */
+    long getOrderCount();
 }

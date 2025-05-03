@@ -13,28 +13,18 @@ import java.util.Optional;
 
 @Repository
 public interface VirtualAccountRepository extends JpaRepository<VirtualAccount, Long> {
-    //List<VirtualAccount> findByUser(User user);
-    Optional<VirtualAccount> findByAccountNumber(String accountNumber);
-    List<VirtualAccount> findByUserAndCurrency(User user, String currency);
-    List<VirtualAccount> findByUserAndActive(User user, boolean active);
 
-    // Added optimized queries
-    @Query("SELECT v FROM VirtualAccount v WHERE v.user.id = :userId")
-    List<VirtualAccount> findByUserId(@Param("userId") Long userId);
-
-    @Query("SELECT v FROM VirtualAccount v WHERE v.user.id IN :userIds")
-    List<VirtualAccount> findByUserIdIn(@Param("userIds") List<Long> userIds);
-
-    @Query("SELECT v FROM VirtualAccount v WHERE v.createdAt > :cutoffDate")
-    List<VirtualAccount> findByCreatedAtAfter(@Param("cutoffDate") LocalDateTime cutoffDate);
+    @Query("SELECT v FROM VirtualAccount v JOIN FETCH v.user WHERE v.user.id = :userId")
+    List<VirtualAccount> findByUserIdWithUser(@Param("userId") Long userId);
 
     @Query("SELECT v FROM VirtualAccount v JOIN FETCH v.user WHERE v.accountNumber = :accountNumber")
     Optional<VirtualAccount> findByAccountNumberWithUser(@Param("accountNumber") String accountNumber);
 
-    @Query("SELECT v FROM VirtualAccount v WHERE v.user.id = :userId AND v.currency = :currency")
-    List<VirtualAccount> findByUserIdAndCurrency(@Param("userId") Long userId, @Param("currency") String currency);
+    @Query("SELECT v FROM VirtualAccount v JOIN FETCH v.user WHERE v.user.id = :userId AND v.currency = :currency")
+    List<VirtualAccount> findByUserIdAndCurrencyWithUser(@Param("userId") Long userId, @Param("currency") String currency);
 
-    @Query(value = "SELECT * FROM virtual_accounts WHERE user_id = :userId ORDER BY created_at DESC LIMIT 1",
-            nativeQuery = true)
-    Optional<VirtualAccount> findLatestByUserId(@Param("userId") Long userId);
+    // Keep existing methods as fallback
+    List<VirtualAccount> findByUserId(Long userId);
+    Optional<VirtualAccount> findByAccountNumber(String accountNumber);
+    List<VirtualAccount> findByUserIdAndCurrency(Long userId, String currency);
 }

@@ -284,4 +284,19 @@ public class OrderServiceImpl implements OrderService {
         order.setStatus(OrderStatus.CANCELLED.getCode());
         orderRepository.save(order);
     }
+
+    /**
+     * Get total count of orders in the system
+     * @return Count of orders
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public long getOrderCount() {
+        try {
+            return orderRepository.count();
+        } catch (Exception e) {
+            //log.error("Error getting order count", e);
+            return -1; // Indicate error
+        }
+    }
 }

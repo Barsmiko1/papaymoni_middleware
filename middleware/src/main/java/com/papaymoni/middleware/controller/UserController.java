@@ -10,7 +10,6 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/users")
@@ -48,6 +47,7 @@ public class UserController {
         User updatedUser = userService.updateUser(user);
         return ResponseEntity.ok(ApiResponse.success("User updated successfully", updatedUser));
     }
+
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")

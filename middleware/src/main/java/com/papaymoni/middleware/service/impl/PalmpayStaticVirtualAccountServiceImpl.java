@@ -2,7 +2,7 @@ package com.papaymoni.middleware.service.impl;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.papaymoni.middleware.dto.VirtualAccountResponse;
+import com.papaymoni.middleware.dto.VirtualAccountResponseDto;
 import com.papaymoni.middleware.model.User;
 import com.papaymoni.middleware.service.EncryptionService;
 import com.papaymoni.middleware.service.PalmpayStaticVirtualAccountService;
@@ -23,13 +23,13 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.security.SecureRandom;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 @Slf4j
@@ -56,12 +56,23 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
     private final ObjectMapper objectMapper;
     private final EncryptionService encryptionService;
 
-    // Circuit breaker fields
+    // Improved circuit breaker state management with lock
+    private final ReentrantReadWriteLock circuitBreakerLock = new ReentrantReadWriteLock();
     private final AtomicInteger failureCount = new AtomicInteger(0);
     private final AtomicBoolean circuitOpen = new AtomicBoolean(false);
     private volatile long circuitOpenTimestamp = 0;
     private static final int FAILURE_THRESHOLD = 5;
     private static final long RESET_TIMEOUT_MS = 60000; // 1 minute
+    private static final long HALF_OPEN_TIMEOUT_MS = 10000; // 10 seconds for half-open state
+
+    // Track success/failure in half-open state
+    private final AtomicBoolean halfOpenState = new AtomicBoolean(false);
+    private final AtomicInteger halfOpenSuccessCount = new AtomicInteger(0);
+    private static final int REQUIRED_SUCCESS_THRESHOLD = 3;
+
+    // Track service health for monitoring
+    private final ConcurrentHashMap<String, Long> endpointLatency = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicInteger> endpointErrors = new ConcurrentHashMap<>();
 
     public PalmpayStaticVirtualAccountServiceImpl(
             ObjectMapper objectMapper,
@@ -90,11 +101,16 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
     @PostConstruct
     public void init() {
         log.info("PalmpayStaticVirtualAccountService initialized with base URL: {}", palmpayGatewayBaseUrl);
+        // Initialize error tracking for endpoints
+        endpointErrors.put(CREATE_ENDPOINT, new AtomicInteger(0));
+        endpointErrors.put(UPDATE_ENDPOINT, new AtomicInteger(0));
+        endpointErrors.put(DELETE_ENDPOINT, new AtomicInteger(0));
+        endpointErrors.put(QUERY_ENDPOINT, new AtomicInteger(0));
     }
 
     @Override
     @Cacheable(value = "virtualAccountCreations", key = "#user.id + '-' + #currency")
-    public VirtualAccountResponse createVirtualAccount(User user, String currency) throws IOException {
+    public VirtualAccountResponseDto createVirtualAccount(User user, String currency) throws IOException {
         // Check circuit breaker
         if (isCircuitOpen()) {
             log.warn("Circuit breaker open, rejecting request to create virtual account");
@@ -119,14 +135,18 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
         requestParams.put("email", email);
         requestParams.put("nonceStr", generateNonce());
 
+        long startTime = System.currentTimeMillis();
         try {
             // Make API call
             Map<String, Object> responseMap = callPalmpayApi(CREATE_ENDPOINT, requestParams);
 
+            // Track latency
+            endpointLatency.put(CREATE_ENDPOINT, System.currentTimeMillis() - startTime);
+
             if (isSuccessResponse(responseMap)) {
                 Map<String, Object> resultData = (Map<String, Object>) responseMap.get("data");
 
-                VirtualAccountResponse response = new VirtualAccountResponse();
+                VirtualAccountResponseDto response = new VirtualAccountResponseDto();
                 response.setAccountNumber((String) resultData.get("virtualAccountNo"));
                 response.setBankName("Palmpay");
                 response.setBankCode("100004"); // Default bank code for Palmpay
@@ -140,11 +160,11 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
                         ? (String) responseMap.get("respMsg")
                         : "Unknown error";
                 log.error("Failed to create virtual account: {}", errorMsg);
-                recordFailure();
+                recordFailure(CREATE_ENDPOINT);
                 throw new IOException("Failed to create virtual account: " + errorMsg);
             }
         } catch (IOException e) {
-            recordFailure();
+            recordFailure(CREATE_ENDPOINT);
             throw e;
         }
     }
@@ -167,9 +187,13 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
         requestParams.put("virtualAccountNo", virtualAccountNo);
         requestParams.put("status", status);
 
+        long startTime = System.currentTimeMillis();
         try {
             // Make API call
             Map<String, Object> responseMap = callPalmpayApi(UPDATE_ENDPOINT, requestParams);
+
+            // Track latency
+            endpointLatency.put(UPDATE_ENDPOINT, System.currentTimeMillis() - startTime);
 
             boolean success = isSuccessResponse(responseMap);
             if (success) {
@@ -180,12 +204,12 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
                         ? (String) responseMap.get("respMsg")
                         : "Unknown error";
                 log.error("Failed to update virtual account status: {}", errorMsg);
-                recordFailure();
+                recordFailure(UPDATE_ENDPOINT);
             }
 
             return success;
         } catch (IOException e) {
-            recordFailure();
+            recordFailure(UPDATE_ENDPOINT);
             throw e;
         }
     }
@@ -207,9 +231,13 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
         requestParams.put("nonceStr", generateNonce());
         requestParams.put("virtualAccountNo", virtualAccountNo);
 
+        long startTime = System.currentTimeMillis();
         try {
             // Make API call
             Map<String, Object> responseMap = callPalmpayApi(DELETE_ENDPOINT, requestParams);
+
+            // Track latency
+            endpointLatency.put(DELETE_ENDPOINT, System.currentTimeMillis() - startTime);
 
             boolean success = isSuccessResponse(responseMap);
             if (success) {
@@ -220,19 +248,19 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
                         ? (String) responseMap.get("respMsg")
                         : "Unknown error";
                 log.error("Failed to delete virtual account: {}", errorMsg);
-                recordFailure();
+                recordFailure(DELETE_ENDPOINT);
             }
 
             return success;
         } catch (IOException e) {
-            recordFailure();
+            recordFailure(DELETE_ENDPOINT);
             throw e;
         }
     }
 
     @Override
     @Cacheable(value = "virtualAccountDetails", key = "#virtualAccountNo")
-    public VirtualAccountResponse queryVirtualAccount(String virtualAccountNo) throws IOException {
+    public VirtualAccountResponseDto queryVirtualAccount(String virtualAccountNo) throws IOException {
         // Check circuit breaker
         if (isCircuitOpen()) {
             log.warn("Circuit breaker open, rejecting request to query virtual account");
@@ -248,14 +276,18 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
         requestParams.put("nonceStr", generateNonce());
         requestParams.put("virtualAccountNo", virtualAccountNo);
 
+        long startTime = System.currentTimeMillis();
         try {
             // Make API call
             Map<String, Object> responseMap = callPalmpayApi(QUERY_ENDPOINT, requestParams);
 
+            // Track latency
+            endpointLatency.put(QUERY_ENDPOINT, System.currentTimeMillis() - startTime);
+
             if (isSuccessResponse(responseMap)) {
                 Map<String, Object> resultData = (Map<String, Object>) responseMap.get("data");
 
-                VirtualAccountResponse response = new VirtualAccountResponse();
+                VirtualAccountResponseDto response = new VirtualAccountResponseDto();
                 response.setAccountNumber((String) resultData.get("virtualAccountNo"));
                 response.setBankName("Palmpay");
                 response.setBankCode("100004"); // Default bank code for Palmpay
@@ -269,11 +301,11 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
                         ? (String) responseMap.get("respMsg")
                         : "Unknown error";
                 log.error("Failed to query virtual account: {}", errorMsg);
-                recordFailure();
+                recordFailure(QUERY_ENDPOINT);
                 throw new IOException("Failed to query virtual account: " + errorMsg);
             }
         } catch (IOException e) {
-            recordFailure();
+            recordFailure(QUERY_ENDPOINT);
             throw e;
         }
     }
@@ -281,6 +313,27 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
     @Override
     public boolean isServiceAvailable() {
         return !isCircuitOpen();
+    }
+
+    /**
+     * Get service health information for monitoring
+     * @return Map containing circuit breaker state and endpoint metrics
+     */
+    public Map<String, Object> getServiceHealth() {
+        Map<String, Object> healthInfo = new HashMap<>();
+        healthInfo.put("circuitOpen", circuitOpen.get());
+        healthInfo.put("failureCount", failureCount.get());
+        healthInfo.put("halfOpenState", halfOpenState.get());
+        healthInfo.put("endpointLatency", new HashMap<>(endpointLatency));
+
+        // Copy error counts atomically
+        Map<String, Integer> errorCounts = new HashMap<>();
+        for (Map.Entry<String, AtomicInteger> entry : endpointErrors.entrySet()) {
+            errorCounts.put(entry.getKey(), entry.getValue().get());
+        }
+        healthInfo.put("endpointErrors", errorCounts);
+
+        return healthInfo;
     }
 
     /**
@@ -301,7 +354,7 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
             throw new IOException("Failed to generate signature: " + e.getMessage());
         }
 
-        // Convert request params to JSON
+        // Convert request params to JSON with security handling
         String requestBody;
         try {
             requestBody = objectMapper.writeValueAsString(requestParams);
@@ -310,7 +363,7 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
             throw new IOException("Failed to serialize request parameters", e);
         }
 
-        // Create HTTP request
+        // Create HTTP request with proper headers and timeout
         HttpPost httpPost = new HttpPost(palmpayGatewayBaseUrl + endpoint);
 
         // Set headers
@@ -341,7 +394,7 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
                 throw new IOException("Failed to read response from Palmpay Gateway", e);
             }
 
-            log.debug("Palmpay Gateway API response status: {}, body: {}", statusCode, responseBody);
+            log.debug("Palmpay Gateway API response status: {}", statusCode);
 
             if (statusCode >= 400) {
                 log.error("Palmpay Gateway API error: {} - {}", statusCode, responseBody);
@@ -409,32 +462,91 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
         }
     }
 
-    // Circuit breaker methods
+    // Improved circuit breaker methods with proper synchronization and state transitions
     private boolean isCircuitOpen() {
-        if (circuitOpen.get()) {
-            // Check if enough time has passed to try again
-            if (System.currentTimeMillis() - circuitOpenTimestamp > RESET_TIMEOUT_MS) {
-                log.info("Circuit breaker reset timeout reached, attempting recovery");
-                circuitOpen.set(false);
-                failureCount.set(0);
+        circuitBreakerLock.readLock().lock();
+        try {
+            if (circuitOpen.get()) {
+                long currentTime = System.currentTimeMillis();
+                // Check if enough time has passed to enter half-open state
+                if (currentTime - circuitOpenTimestamp > RESET_TIMEOUT_MS) {
+                    circuitBreakerLock.readLock().unlock();
+                    circuitBreakerLock.writeLock().lock();
+                    try {
+                        // Double-check to prevent race condition
+                        if (circuitOpen.get() && currentTime - circuitOpenTimestamp > RESET_TIMEOUT_MS) {
+                            log.info("Circuit breaker entering half-open state");
+                            halfOpenState.set(true);
+                            halfOpenSuccessCount.set(0);
+                            // Keep circuit open but allow a test request
+                            return false;
+                        }
+                    } finally {
+                        circuitBreakerLock.writeLock().unlock();
+                        circuitBreakerLock.readLock().lock();
+                    }
+                }
+                return true;
+            } else if (halfOpenState.get()) {
+                // In half-open state, allow a limited number of requests
                 return false;
             }
-            return true;
+            return false;
+        } finally {
+            circuitBreakerLock.readLock().unlock();
         }
-        return false;
     }
 
     private void recordSuccess() {
-        failureCount.set(0);
-        circuitOpen.set(false);
+        circuitBreakerLock.writeLock().lock();
+        try {
+            if (halfOpenState.get()) {
+                // In half-open state, count successes until threshold is reached
+                int successCount = halfOpenSuccessCount.incrementAndGet();
+                if (successCount >= REQUIRED_SUCCESS_THRESHOLD) {
+                    log.info("Circuit breaker closed after {} consecutive successes", successCount);
+                    // Close the circuit
+                    circuitOpen.set(false);
+                    halfOpenState.set(false);
+                    failureCount.set(0);
+                }
+            } else {
+                // Normal success, reset failure count
+                failureCount.set(0);
+                circuitOpen.set(false);
+            }
+        } finally {
+            circuitBreakerLock.writeLock().unlock();
+        }
     }
 
-    private void recordFailure() {
-        int failures = failureCount.incrementAndGet();
-        if (failures >= FAILURE_THRESHOLD && !circuitOpen.get()) {
-            log.warn("Circuit breaker threshold reached ({} failures), opening circuit", failures);
-            circuitOpen.set(true);
-            circuitOpenTimestamp = System.currentTimeMillis();
+    private void recordFailure(String endpoint) {
+        circuitBreakerLock.writeLock().lock();
+        try {
+            // Track error for specific endpoint
+            AtomicInteger endpointErrorCount = endpointErrors.get(endpoint);
+            if (endpointErrorCount != null) {
+                endpointErrorCount.incrementAndGet();
+            }
+
+            if (halfOpenState.get()) {
+                // In half-open state, immediate failure reopens the circuit
+                log.warn("Circuit breaker reopened due to failure in half-open state");
+                circuitOpen.set(true);
+                halfOpenState.set(false);
+                circuitOpenTimestamp = System.currentTimeMillis();
+                failureCount.set(FAILURE_THRESHOLD);
+            } else {
+                // Normal failure counter
+                int failures = failureCount.incrementAndGet();
+                if (failures >= FAILURE_THRESHOLD && !circuitOpen.get()) {
+                    log.warn("Circuit breaker threshold reached ({} failures), opening circuit", failures);
+                    circuitOpen.set(true);
+                    circuitOpenTimestamp = System.currentTimeMillis();
+                }
+            }
+        } finally {
+            circuitBreakerLock.writeLock().unlock();
         }
     }
 }

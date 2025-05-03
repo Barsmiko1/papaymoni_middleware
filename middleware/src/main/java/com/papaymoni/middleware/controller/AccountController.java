@@ -2,6 +2,7 @@ package com.papaymoni.middleware.controller;
 
 import com.papaymoni.middleware.dto.ApiResponse;
 import com.papaymoni.middleware.dto.VirtualAccountDto;
+import com.papaymoni.middleware.dto.VirtualAccountResponseDto;
 import com.papaymoni.middleware.exception.*;
 import com.papaymoni.middleware.model.User;
 import com.papaymoni.middleware.model.VirtualAccount;
@@ -47,10 +48,15 @@ public class AccountController {
             User user = userRepository.findByUsername(currentUser.getUsername())
                     .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
-            // Don't manipulate cache directly, rely on service's @Cacheable annotation
+            // Get virtual accounts using optimized JOIN FETCH query
             List<VirtualAccount> accounts = virtualAccountService.getUserVirtualAccounts(user);
 
-            return ResponseEntity.ok(ApiResponse.success("Virtual accounts retrieved successfully", accounts));
+            // Convert accounts to DTOs to prevent circular references
+            List<VirtualAccountResponseDto> accountDtos = accounts.stream()
+                    .map(this::convertToDto)
+                    .collect(Collectors.toList());
+
+            return ResponseEntity.ok(ApiResponse.success("Virtual accounts retrieved successfully", accountDtos));
         } catch (ResourceNotFoundException e) {
             log.error("User not found: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -61,6 +67,20 @@ public class AccountController {
                     .body(ApiResponse.error("Failed to retrieve virtual accounts: " + e.getMessage(),
                             "VIRTUAL_ACCOUNTS_ERROR"));
         }
+    }
+
+    // Helper method to convert to DTO
+    private VirtualAccountResponseDto convertToDto(VirtualAccount account) {
+        VirtualAccountResponseDto dto = new VirtualAccountResponseDto();
+        dto.setId(String.valueOf(account.getId()));
+        dto.setAccountNumber(account.getAccountNumber());
+        dto.setBankCode(account.getBankCode());
+        dto.setBankName(account.getBankName());
+        dto.setAccountName(account.getAccountName());
+        dto.setCurrency(account.getCurrency());
+        dto.setBalance(account.getBalance());
+        dto.setActive(account.isActive());
+        return dto;
     }
 
     /**

@@ -1,6 +1,8 @@
+// Update VirtualAccount.java
 package com.papaymoni.middleware.model;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonBackReference;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Data;
 
 import javax.persistence.*;
@@ -16,31 +18,10 @@ public class VirtualAccount {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    //@OneToOne
-//    @JoinColumn(name = "user_id", nullable = false)
-//    @JsonIgnoreProperties(value = {"user"}, allowSetters = true)
-//    private User user;
-
-    @ManyToOne(fetch = FetchType.LAZY)  // Change to LAZY fetch type
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_id", nullable = false)
-    @JsonIgnoreProperties("virtualAccounts")  // Add this annotation
+    @JsonBackReference
     private User user;
-
-    // Avoid circular reference in toString
-    @Override
-    public String toString() {
-        return "VirtualAccount{" +
-                "id=" + id +
-                ", accountNumber='" + accountNumber + '\'' +
-                ", bankCode='" + bankCode + '\'' +
-                ", bankName='" + bankName + '\'' +
-                ", accountName='" + accountName + '\'' +
-                ", currency='" + currency + '\'' +
-                ", balance=" + balance +
-                ", active=" + active +
-                ", userId=" + (user != null ? user.getId() : null) +
-                '}';
-    }
 
     private String accountNumber;
     private String bankCode;
@@ -51,6 +32,7 @@ public class VirtualAccount {
     private boolean active;
 
     @OneToMany(mappedBy = "virtualAccount")
+    @JsonIgnore
     private Set<Transaction> transactions;
 
     private LocalDateTime createdAt;
@@ -65,5 +47,21 @@ public class VirtualAccount {
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
+    }
+
+    // Override toString method to avoid circular references
+    @Override
+    public String toString() {
+        return "VirtualAccount{" +
+                "id=" + id +
+                ", accountNumber='" + accountNumber + '\'' +
+                ", bankCode='" + bankCode + '\'' +
+                ", bankName='" + bankName + '\'' +
+                ", accountName='" + accountName + '\'' +
+                ", currency='" + currency + '\'' +
+                ", balance=" + balance +
+                ", active=" + active +
+                ", userId=" + (user != null ? user.getId() : null) +
+                '}';
     }
 }
