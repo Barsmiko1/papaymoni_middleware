@@ -192,8 +192,9 @@ public class PalmpayVerifySignUtil {
         StringBuilder sb = new StringBuilder();
         for (String k : keyArray) {
             String value = data.get(k);
-            if (value != null && value.trim().length() > 0) { // Skip empty values
-                sb.append(k).append("=").append(value.trim()).append("&");
+            if (value != null && value.trim().length() > 0) { // Do not Skip empty values
+                sb.append(k).append("=").append(value).append("&");
+
             }
         }
 

@@ -6,10 +6,7 @@ import com.papaymoni.middleware.exception.ResourceNotFoundException;
 import com.papaymoni.middleware.model.User;
 import com.papaymoni.middleware.model.VirtualAccount;
 import com.papaymoni.middleware.repository.UserRepository;
-import com.papaymoni.middleware.service.EmailVerificationService;
-import com.papaymoni.middleware.service.EncryptionService;
-import com.papaymoni.middleware.service.UserService;
-import com.papaymoni.middleware.service.VirtualAccountService;
+import com.papaymoni.middleware.service.*;
 import com.papaymoni.middleware.util.ReferralCodeGenerator;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -31,6 +28,7 @@ public class UserServiceImpl implements UserService {
     private final PasswordEncoder passwordEncoder;
     private final EmailVerificationService emailVerificationService;
     private final VirtualAccountService virtualAccountService;
+    private final WalletBalanceService walletBalanceService;
 
     private final EncryptionService encryptionService;
     private final CacheManager cacheManager;
@@ -42,6 +40,7 @@ public class UserServiceImpl implements UserService {
                            VirtualAccountService virtualAccountService,
                            CacheManager cacheManager,
                            RabbitTemplate rabbitTemplate,
+                           WalletBalanceService walletBalanceService,
                            EmailVerificationService emailVerificationService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
@@ -49,6 +48,7 @@ public class UserServiceImpl implements UserService {
         this.virtualAccountService = virtualAccountService;
         this.encryptionService = encryptionService;
         this.cacheManager = cacheManager;
+        this.walletBalanceService = walletBalanceService;
         this.rabbitTemplate = rabbitTemplate;
 
     }
@@ -82,7 +82,12 @@ public class UserServiceImpl implements UserService {
         }
 
         User user = buildBasicUser(registrationDto);
-        return userRepository.save(user);
+        User savedUser = userRepository.save(user);
+
+        // Initialize wallet balances for the new user
+        walletBalanceService.initializeUserWallets(savedUser);
+
+        return savedUser;
     }
 
     @Override
@@ -133,6 +138,7 @@ public class UserServiceImpl implements UserService {
         }
         return user;
     }
+
 
     @Override
     @Cacheable(value = "users", key = "#id")

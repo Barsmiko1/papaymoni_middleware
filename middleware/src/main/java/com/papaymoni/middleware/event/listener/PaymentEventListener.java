@@ -62,6 +62,7 @@ import com.papaymoni.middleware.dto.UserEventDto;
 import com.papaymoni.middleware.event.NotificationEvent;
 import com.papaymoni.middleware.event.PaymentProcessedEvent;
 import com.papaymoni.middleware.model.Transaction;
+import com.papaymoni.middleware.model.User;
 import com.papaymoni.middleware.service.NotificationService;
 import com.papaymoni.middleware.service.TransactionService;
 import com.papaymoni.middleware.service.UserService;
@@ -89,26 +90,30 @@ public class PaymentEventListener {
 
         try {
             Transaction transaction = transactionService.getTransactionById(event.getTransactionId());
+            User user = userService.getUserById(event.getUserId());
 
-            // Get user DTO instead of the full entity
-            UserEventDto userDto = userService.getUserEventDtoById(event.getUserId());
-
-            String title = "Transaction Processed";
-            String message = "Your " + transaction.getTransactionType().toLowerCase() +
-                    " of " + transaction.getAmount() + " " + transaction.getCurrency() +
-                    " has been processed successfully.";
-
-            // Send notification using the DTO
-            notificationService.createNotificationForUser(
-                    userDto.getUserId(),
-                    "EMAIL",
-                    title,
-                    message
-            );
+            // Use enhanced notification methods
+            if ("DEPOSIT".equals(transaction.getTransactionType())) {
+                notificationService.sendDepositNotification(
+                        user,
+                        transaction.getAmount(),
+                        transaction.getCurrency(),
+                        transaction.getId()
+                );
+            } else if ("WITHDRAWAL".equals(transaction.getTransactionType())) {
+                notificationService.sendWithdrawalNotification(
+                        user,
+                        transaction.getAmount(),
+                        transaction.getCurrency(),
+                        transaction.getId(),
+                        transaction.getFee()
+                );
+            }
 
             log.info("Successfully processed payment event for transaction: {}", event.getTransactionId());
         } catch (Exception e) {
             log.error("Error handling payment event: {}", e.getMessage(), e);
         }
     }
+
 }

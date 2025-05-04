@@ -12,6 +12,7 @@ public interface GLService {
     BigDecimal getUserBalance(User user);
     BigDecimal getUserBalanceByCurrency(User user, String currency);
     boolean hasSufficientBalance(User user, BigDecimal amount);
+    boolean hasSufficientBalance(User user, BigDecimal amount, String currency);  // Add this new method signature
     void debitUserAccount(User user, BigDecimal amount);
     void creditUserAccount(User user, BigDecimal amount);
     void creditFeeAccount(BigDecimal amount);

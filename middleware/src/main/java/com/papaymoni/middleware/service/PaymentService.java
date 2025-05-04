@@ -10,20 +10,13 @@ import java.util.Map;
 
 public interface PaymentService {
     boolean hasSufficientBalance(User user, BigDecimal amount);
+    boolean hasSufficientBalance(User user, BigDecimal amount, String currency);  // Add this new method
     Transaction processPayment(User user, Order order);
     Transaction processBuyOrderPayment(User user, Order order);
     Transaction processDeposit(VirtualAccount virtualAccount, BigDecimal amount, String reference);
     byte[] getReceiptData(Transaction transaction);
     Transaction findTransaction(String reference);
     BigDecimal calculateFee(BigDecimal amount);
-
-    /**
-     * Process a deposit from Palmpay webhook
-     * @param virtualAccount the virtual account receiving the deposit
-     * @param amount the amount being deposited
-     * @param orderReference the Palmpay order reference
-     * @param payerDetails details of the payer
-     * @return the created transaction
-     */
+    BigDecimal calculateFee(BigDecimal amount, String currency);  // Also add currency support for fee calculation
     Transaction processPalmpayDeposit(VirtualAccount virtualAccount, BigDecimal amount, String orderReference, Map<String, String> payerDetails);
 }

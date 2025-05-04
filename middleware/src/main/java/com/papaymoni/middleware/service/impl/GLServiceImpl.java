@@ -72,15 +72,29 @@ public class GLServiceImpl implements GLService {
     }
 
     /**
-     * Check if a user has sufficient balance
+     * Check if a user has sufficient balance (defaults to NGN for backward compatibility)
      * @param user the user to check
      * @param amount the amount to check
      * @return true if the user has sufficient balance
      */
     @Override
     public boolean hasSufficientBalance(User user, BigDecimal amount) {
-        BigDecimal balance = getUserBalance(user);
-        log.info("Checking if user {} has sufficient balance: {} >= {}", user.getId(), balance, amount);
+        // Default to NGN for backward compatibility
+        return hasSufficientBalance(user, amount, "NGN");
+    }
+
+    /**
+     * Check if a user has sufficient balance
+     * @param user the user to check
+     * @param amount the amount to check
+     * @param currency the currency to check
+     * @return true if the user has sufficient balance
+     */
+    @Override
+    public boolean hasSufficientBalance(User user, BigDecimal amount, String currency) {
+        BigDecimal balance = getUserBalanceByCurrency(user, currency);
+        log.info("Checking if user {} has sufficient balance in {}: {} >= {}",
+                user.getId(), currency, balance, amount);
         return balance.compareTo(amount) >= 0;
     }
 }
