@@ -84,7 +84,7 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
 
         try {
             // Use the improved method with JOIN FETCH to avoid N+1 queries
-            return virtualAccountRepository.findByUserIdWithUser(user.getId());
+            return virtualAccountRepository.findByUserIdWithJoinFetch(user.getId());
         } catch (Exception e) {
             operationErrors.get("getUserAccounts").incrementAndGet();
             log.error("Error fetching virtual accounts for user: {}", user.getId(), e);
@@ -192,7 +192,7 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
 
         try {
             // Use the improved method with JOIN FETCH to avoid N+1 queries
-            return virtualAccountRepository.findByAccountNumberWithUser(accountNumber)
+            return virtualAccountRepository.findByAccountNumberWithJoinFetch(accountNumber)
                     .orElseThrow(() -> new ResourceNotFoundException("Virtual account not found with account number: " + accountNumber));
         } catch (ResourceNotFoundException e) {
             throw e;

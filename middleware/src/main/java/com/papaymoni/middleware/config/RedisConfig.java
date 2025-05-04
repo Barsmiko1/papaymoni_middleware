@@ -149,6 +149,12 @@ public class RedisConfig {
         cacheConfigurations.put("virtualAccountById", defaultCacheConfig.entryTtl(Duration.ofMinutes(10)));
         cacheConfigurations.put("virtualAccountByNumber", defaultCacheConfig.entryTtl(Duration.ofMinutes(10)));
         cacheConfigurations.put("virtualAccountCreations", defaultCacheConfig.entryTtl(Duration.ofMinutes(5)));
+        cacheConfigurations.put("virtualAccountsByUser", defaultCacheConfig.entryTtl(Duration.ofMinutes(15)));
+
+        // Transaction caches
+        cacheConfigurations.put("transactionById", defaultCacheConfig.entryTtl(Duration.ofMinutes(10)));
+        cacheConfigurations.put("transactionsByUser", defaultCacheConfig.entryTtl(Duration.ofMinutes(5)));
+        cacheConfigurations.put("transactionReceipts", defaultCacheConfig.entryTtl(Duration.ofHours(1)));
 
         return RedisCacheManager.builder(connectionFactory)
                 .cacheDefaults(defaultCacheConfig)

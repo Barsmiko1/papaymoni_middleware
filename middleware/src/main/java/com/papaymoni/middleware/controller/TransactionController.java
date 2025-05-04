@@ -9,6 +9,7 @@ import com.papaymoni.middleware.service.TransactionService;
 import com.papaymoni.middleware.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -120,6 +121,7 @@ public class TransactionController {
     }
 
     @GetMapping("/{id}/receipt")
+    @Cacheable(value = "transactionReceipts", key = "#id")
     public ResponseEntity<?> getTransactionReceipt(
             @PathVariable Long id,
             @AuthenticationPrincipal UserDetails currentUser) {
@@ -139,20 +141,16 @@ public class TransactionController {
                         .body(ApiResponse.error("Receipt not available for this transaction"));
             }
 
-            // Get receipt data
-            byte[] receiptData = receiptService.getReceipt(transaction.getReceiptUrl());
+            // Get receipt data with caching
+            byte[] receiptData = getReceiptDataWithCaching(transaction);
 
-            // Determine content type based on file extension
-            String contentType = "application/pdf"; // default
-            if (transaction.getReceiptUrl().toLowerCase().endsWith(".txt")) {
-                contentType = "text/plain";
-            } else if (transaction.getReceiptUrl().toLowerCase().endsWith(".html")) {
-                contentType = "text/html";
-            }
+            // Determine content type
+            String contentType = determineContentType(transaction.getReceiptUrl());
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.parseMediaType(contentType));
-            headers.setContentDispositionFormData("attachment", "receipt_" + id + ".pdf");
+            headers.setContentDispositionFormData("attachment",
+                    "receipt_" + id + getFileExtension(contentType));
             headers.setContentLength(receiptData.length);
 
             return new ResponseEntity<>(receiptData, headers, HttpStatus.OK);
@@ -210,13 +208,7 @@ public class TransactionController {
             @RequestParam(defaultValue = "10") int limit) {
         try {
             User user = userService.getUserByUsername(currentUser.getUsername());
-            List<Transaction> transactions = transactionService.getUserTransactions(user);
-
-            // Get the most recent transactions
-            List<Transaction> recentTransactions = transactions.stream()
-                    .sorted((t1, t2) -> t2.getCreatedAt().compareTo(t1.getCreatedAt()))
-                    .limit(limit)
-                    .collect(Collectors.toList());
+            List<Transaction> recentTransactions = transactionService.getRecentTransactions(user, limit);
 
             return ResponseEntity.ok(
                     ApiResponse.success("Recent transactions retrieved successfully", recentTransactions)
@@ -235,40 +227,7 @@ public class TransactionController {
             User user = userService.getUserByUsername(currentUser.getUsername());
             List<Transaction> transactions = transactionService.getUserTransactions(user);
 
-            Map<String, Object> summary = new HashMap<>();
-
-            // Calculate total deposits
-            BigDecimal totalDeposits = transactions.stream()
-                    .filter(t -> "DEPOSIT".equals(t.getTransactionType()))
-                    .map(Transaction::getAmount)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-            // Calculate total withdrawals
-            BigDecimal totalWithdrawals = transactions.stream()
-                    .filter(t -> "WITHDRAWAL".equals(t.getTransactionType()))
-                    .map(Transaction::getAmount)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-            // Calculate total fees
-            BigDecimal totalFees = transactions.stream()
-                    .map(Transaction::getFee)
-                    .filter(Objects::nonNull)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-            // Count transactions by type
-            Map<String, Long> transactionsByType = transactions.stream()
-                    .collect(Collectors.groupingBy(Transaction::getTransactionType, Collectors.counting()));
-
-            // Count transactions by status
-            Map<String, Long> transactionsByStatus = transactions.stream()
-                    .collect(Collectors.groupingBy(Transaction::getStatus, Collectors.counting()));
-
-            summary.put("totalDeposits", totalDeposits);
-            summary.put("totalWithdrawals", totalWithdrawals);
-            summary.put("totalFees", totalFees);
-            summary.put("transactionCount", transactions.size());
-            summary.put("transactionsByType", transactionsByType);
-            summary.put("transactionsByStatus", transactionsByStatus);
+            Map<String, Object> summary = calculateTransactionSummary(transactions);
 
             return ResponseEntity.ok(
                     ApiResponse.success("Transaction summary retrieved successfully", summary)
@@ -278,5 +237,67 @@ public class TransactionController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(ApiResponse.error("Failed to retrieve transaction summary: " + e.getMessage()));
         }
+    }
+
+    // Private helper methods
+
+    @Cacheable(value = "transactionReceipts", key = "#transaction.id + '-data'")
+    private byte[] getReceiptDataWithCaching(Transaction transaction) {
+        return receiptService.getReceipt(transaction.getReceiptUrl());
+    }
+
+    private String determineContentType(String receiptUrl) {
+        String lowercaseUrl = receiptUrl.toLowerCase();
+        if (lowercaseUrl.endsWith(".pdf")) return "application/pdf";
+        if (lowercaseUrl.endsWith(".txt")) return "text/plain";
+        if (lowercaseUrl.endsWith(".html")) return "text/html";
+        return "application/pdf"; // default
+    }
+
+    private String getFileExtension(String contentType) {
+        switch (contentType) {
+            case "text/plain": return ".txt";
+            case "text/html": return ".html";
+            default: return ".pdf";
+        }
+    }
+
+    private Map<String, Object> calculateTransactionSummary(List<Transaction> transactions) {
+        Map<String, Object> summary = new HashMap<>();
+
+        // Calculate total deposits
+        BigDecimal totalDeposits = transactions.stream()
+                .filter(t -> "DEPOSIT".equals(t.getTransactionType()))
+                .map(Transaction::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // Calculate total withdrawals
+        BigDecimal totalWithdrawals = transactions.stream()
+                .filter(t -> "WITHDRAWAL".equals(t.getTransactionType()))
+                .map(Transaction::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // Calculate total fees
+        BigDecimal totalFees = transactions.stream()
+                .map(Transaction::getFee)
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        // Count transactions by type
+        Map<String, Long> transactionsByType = transactions.stream()
+                .collect(Collectors.groupingBy(Transaction::getTransactionType, Collectors.counting()));
+
+        // Count transactions by status
+        Map<String, Long> transactionsByStatus = transactions.stream()
+                .collect(Collectors.groupingBy(Transaction::getStatus, Collectors.counting()));
+
+        summary.put("totalDeposits", totalDeposits);
+        summary.put("totalWithdrawals", totalWithdrawals);
+        summary.put("totalFees", totalFees);
+        summary.put("transactionCount", transactions.size());
+        summary.put("transactionsByType", transactionsByType);
+        summary.put("transactionsByStatus", transactionsByStatus);
+
+        return summary;
     }
 }
