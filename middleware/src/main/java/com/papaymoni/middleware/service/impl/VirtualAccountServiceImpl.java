@@ -97,7 +97,7 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
     @CacheEvict(value = USER_ACCOUNTS_CACHE, key = "#user.id")
     public VirtualAccount createVirtualAccount(User user, String currency) {
         operationCounts.get("createAccount").incrementAndGet();
-        log.info("Creating new virtual account for user ID: {} with currency: {}", user.getId(), currency);
+        log.info("Creating virtual account for user: {} with currency: {}", user.getUsername(), currency);
 
         try {
             // Check if BVN is verified
@@ -106,11 +106,25 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
                 throw new IllegalStateException("BVN verification is required to create a virtual account");
             }
 
+            // First, check if the user already has a virtual account for this currency
+            List<VirtualAccount> existingAccounts = virtualAccountRepository.findByUserIdAndCurrencyWithUser(user.getId(), currency);
+
+            if (!existingAccounts.isEmpty()) {
+                VirtualAccount existingAccount = existingAccounts.get(0);
+                log.info("User {} already has a virtual account for currency {}, returning existing account: {}",
+                        user.getId(), currency, existingAccount.getAccountNumber());
+
+                // Update cache to ensure consistency
+                updateAccountCache(existingAccount);
+
+                return existingAccount;
+            }
+
             // Get decrypted BVN (if encrypted)
             String bvn = getBvnSafely(user);
 
             // Call PalmpayStaticVirtualAccountService
-            VirtualAccountResponseDto response = palmpayStaticVirtualAccountService.createVirtualAccount(user, currency);
+            VirtualAccountResponseDto response = (VirtualAccountResponseDto) palmpayStaticVirtualAccountService.createVirtualAccount(user, currency);
 
             // Create new virtual account entity within transaction
             VirtualAccount virtualAccount = new VirtualAccount();
@@ -122,6 +136,8 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
             virtualAccount.setCurrency(currency);
             virtualAccount.setBalance(BigDecimal.ZERO);
             virtualAccount.setActive(true);
+            virtualAccount.setCreatedAt(LocalDateTime.now());
+            virtualAccount.setUpdatedAt(LocalDateTime.now());
 
             // Save to database
             VirtualAccount savedAccount = virtualAccountRepository.save(virtualAccount);
@@ -308,7 +324,9 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
      * @return The updated account
      */
     @Override
-    @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.SERIALIZABLE)
+    @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.READ_COMMITTED)
+    @CacheEvict(cacheNames = {ACCOUNT_CACHE, ACCOUNT_NUMBER_CACHE, USER_ACCOUNTS_CACHE},
+            key = "#account.id", allEntries = false)
     public VirtualAccount updateAccountBalance(VirtualAccount account, BigDecimal newBalance) {
         operationCounts.get("updateBalance").incrementAndGet();
 
@@ -337,13 +355,14 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
             currentAccount.setBalance(newBalance);
             currentAccount.setUpdatedAt(LocalDateTime.now());
 
-            // Save changes
-            VirtualAccount updatedAccount = virtualAccountRepository.save(currentAccount);
+            // Force flush to ensure changes are written to the database immediately
+            VirtualAccount updatedAccount = virtualAccountRepository.saveAndFlush(currentAccount);
 
-            // Update cache after successful transaction
-            updateAccountCache(updatedAccount);
+            // Explicitly evict from all caches to ensure fresh data is retrieved
+            evictAccountFromCache(updatedAccount);
 
-            log.info("Successfully updated balance for account: {}", updatedAccount.getAccountNumber());
+            log.info("Successfully updated balance for account: {} to {}",
+                    updatedAccount.getAccountNumber(), updatedAccount.getBalance());
             return updatedAccount;
         } catch (ResourceNotFoundException e) {
             throw e;
@@ -388,23 +407,18 @@ public class VirtualAccountServiceImpl implements VirtualAccountService {
      */
     private void evictAccountFromCache(VirtualAccount account) {
         try {
-            // Retry up to 3 times to ensure cache is evicted
-            int maxRetries = 3;
-            for (int attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                    cacheManager.getCache(ACCOUNT_CACHE).evict(account.getId());
-                    cacheManager.getCache(ACCOUNT_NUMBER_CACHE).evict(account.getAccountNumber());
-                    cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId());
-                    cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId() + "-" + account.getCurrency());
-                    return;
-                } catch (Exception e) {
-                    if (attempt == maxRetries) {
-                        throw e;
-                    }
-                    log.warn("Cache eviction failed (attempt {}), retrying...", attempt, e);
-                    Thread.sleep(100 * attempt);
-                }
+            log.debug("Evicting account {} from all caches", account.getId());
+            // Directly evict specific cache entries
+            cacheManager.getCache(ACCOUNT_CACHE).evict(account.getId());
+            cacheManager.getCache(ACCOUNT_NUMBER_CACHE).evict(account.getAccountNumber());
+
+            // For user accounts cache, we need to evict all entries for this user
+            if (account.getUser() != null) {
+                cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId());
+                cacheManager.getCache(USER_ACCOUNTS_CACHE).evict(account.getUser().getId() + "-" + account.getCurrency());
             }
+
+            log.debug("Successfully evicted account {} from caches", account.getId());
         } catch (Exception e) {
             log.error("Failed to evict cache for account: {}", account.getId(), e);
             // Continue execution - cache failure shouldn't stop business operations

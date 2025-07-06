@@ -23,7 +23,7 @@ public class TransactionMailConfig {
     @Value("${spring.mail.transactions.password}")
     private String mailPassword;
 
-    @Value("${spring.mail.transactions.from.address:alert@papaymoni.com}")
+    @Value("${spring.mail.transactions.from.address}")
     private String fromAddress;
 
     @Bean(name = "transactionMailSender")
@@ -42,7 +42,7 @@ public class TransactionMailConfig {
         props.put("mail.smtp.auth", "true");
         props.put("mail.smtp.starttls.enable", "true");
         props.put("mail.smtp.from", fromAddress);
-        props.put("mail.debug", "true");
+        props.put("mail.debug", "false");
 
         return mailSender;
     }

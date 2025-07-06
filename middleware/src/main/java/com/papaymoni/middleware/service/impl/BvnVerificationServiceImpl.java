@@ -60,7 +60,7 @@ public class BvnVerificationServiceImpl implements BvnVerificationService {
     @Value("${app.name:PapaymoniApp}")
     private String appName;
 
-    @Value("${app.version:1.0}")
+    @Value("${app.version}")
     private String appVersion;
 
     public BvnVerificationServiceImpl(BvnVerificationRepository bvnVerificationRepository,

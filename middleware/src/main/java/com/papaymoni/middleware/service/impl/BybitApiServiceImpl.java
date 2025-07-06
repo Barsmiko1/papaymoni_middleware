@@ -41,22 +41,22 @@ import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 @Service
 public class BybitApiServiceImpl implements BybitApiService {
 
-    @Value("${bybit.api.base-url:https://api.bybit.com}")
+    @Value("${bybit.api.base-url}")
     private String baseUrl;
 
-    @Value("${bybit.api.connect-timeout:10000}")
+    @Value("${bybit.api.connect-timeout}")
     private int connectTimeout;
 
-    @Value("${bybit.api.read-timeout:30000}")
+    @Value("${bybit.api.read-timeout}")
     private int readTimeout;
 
-    @Value("${bybit.api.max-connections:200}")
+    @Value("${bybit.api.max-connections}")
     private int maxConnections;
 
-    @Value("${bybit.api.max-connections-per-route:20}")
+    @Value("${bybit.api.max-connections-per-route}")
     private int maxConnectionsPerRoute;
 
-    @Value("${bybit.api.max-retries:3}")
+    @Value("${bybit.api.max-retries}")
     private int maxRetries;
 
     private final ObjectMapper objectMapper;

@@ -21,6 +21,8 @@ public class VirtualAccountResponseDto {
     private BigDecimal balance;
     private boolean active;
     private String id;
+    private boolean existingAccount;
+
 
     // Additional fields from Palmpay response
     private String status;
@@ -34,8 +36,8 @@ public class VirtualAccountResponseDto {
     public static VirtualAccountResponseDto fromPalmpayResponse(Map<String, Object> data) {
         VirtualAccountResponseDto response = new VirtualAccountResponseDto();
         response.setAccountNumber((String) data.get("virtualAccountNo"));
-        response.setBankName("Palmpay");
-        response.setBankCode("100004"); // Default bank code for Palmpay
+        response.setBankName("BLOOMS MFB");
+        response.setBankCode("090743"); // Default bank code for Palmpay
         response.setAccountName((String) data.get("virtualAccountName"));
         response.setStatus((String) data.get("status"));
         response.setIdentityType((String) data.get("identityType"));
@@ -43,6 +45,8 @@ public class VirtualAccountResponseDto {
         response.setCustomerName((String) data.get("customerName"));
         response.setEmail((String) data.get("email"));
         response.setAccountReference((String) data.get("accountReference"));
+        response.setBalance((BigDecimal) data.get("balance"));
+        response.setExistingAccount(false); // Default to false
         return response;
     }
 }

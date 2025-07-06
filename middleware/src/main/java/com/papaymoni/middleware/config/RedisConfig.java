@@ -12,6 +12,7 @@ import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.EnableCaching;
+import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
@@ -40,7 +41,7 @@ public class RedisConfig {
     @Value("${spring.redis.port}")
     private int redisPort;
 
-    @Value("${spring.redis.password:#{null}}")
+    @Value("${spring.redis.password}")
     private String redisPassword;
 
     @Bean
@@ -150,6 +151,13 @@ public class RedisConfig {
         cacheConfigurations.put("virtualAccountByNumber", defaultCacheConfig.entryTtl(Duration.ofMinutes(10)));
         cacheConfigurations.put("virtualAccountCreations", defaultCacheConfig.entryTtl(Duration.ofMinutes(5)));
         cacheConfigurations.put("virtualAccountsByUser", defaultCacheConfig.entryTtl(Duration.ofMinutes(15)));
+        cacheConfigurations.put("virtualAccounts", defaultCacheConfig.entryTtl(Duration.ofMinutes(15)));
+        cacheConfigurations.put("userVirtualAccounts", defaultCacheConfig.entryTtl(Duration.ofMinutes(15)));
+
+        // withdrawalTransactions and banklist - IMPORTANT: Add these configurations
+        cacheConfigurations.put("bankList", defaultCacheConfig.entryTtl(Duration.ofMinutes(15)));
+        cacheConfigurations.put("withdrawalTransactions", defaultCacheConfig.entryTtl(Duration.ofMinutes(15)));
+
 
         // Transaction caches
         cacheConfigurations.put("transactionById", defaultCacheConfig.entryTtl(Duration.ofMinutes(10)));

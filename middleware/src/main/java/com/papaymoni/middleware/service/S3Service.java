@@ -7,3 +7,4 @@ public interface S3Service {
     byte[] downloadFile(String bucketName, String key);
     String generatePresignedUrl(String bucketName, String key, int expirationMinutes);
 }
+

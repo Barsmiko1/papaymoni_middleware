@@ -59,19 +59,19 @@ public class RabbitMQConfig {
     public static final String DEAD_LETTER_KEY = "dead-letter";
 
     // Configuration values from application properties
-    @Value("${spring.rabbitmq.listener.simple.retry.enabled:true}")
+    @Value("${spring.rabbitmq.listener.simple.retry.enabled}")
     private boolean retryEnabled;
 
-    @Value("${spring.rabbitmq.listener.simple.retry.initial-interval:1000}")
+    @Value("${spring.rabbitmq.listener.simple.retry.initial-interval}")
     private long retryInitialInterval;
 
-    @Value("${spring.rabbitmq.listener.simple.retry.max-attempts:3}")
+    @Value("${spring.rabbitmq.listener.simple.retry.max-attempts}")
     private int retryMaxAttempts;
 
-    @Value("${spring.rabbitmq.listener.simple.retry.multiplier:2.0}")
+    @Value("${spring.rabbitmq.listener.simple.retry.multiplier}")
     private double retryMultiplier;
 
-    @Value("${spring.rabbitmq.message.ttl:60000}")
+    @Value("${spring.rabbitmq.message.ttl}")
     private int defaultMessageTtl;
 
     @Bean
@@ -257,9 +257,6 @@ public class RabbitMQConfig {
         connectionFactory.setRequestedHeartBeat(30);
         connectionFactory.setConnectionTimeout(30000);
 
-        // Remove the unsupported method: setAutomaticRecoveryEnabled
-        // Note: CachingConnectionFactory manages its own connection recovery
-
         // Log connection factory configuration
         log.info("Configured RabbitMQ connection factory: host={}, virtualHost={}, channelCacheSize={}",
                 host, virtualHost, 25);
@@ -289,8 +286,6 @@ public class RabbitMQConfig {
         // Set acknowledgment mode
         factory.setAcknowledgeMode(AcknowledgeMode.AUTO);
 
-        // Configure retries for consumer-side error handling if available
-        // Remove the unsupported method: setRetryDeclarationInterval
 
         // Configure retry for failed message processing
         if (retryEnabled) {

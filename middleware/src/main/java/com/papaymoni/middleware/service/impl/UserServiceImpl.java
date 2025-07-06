@@ -148,10 +148,13 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    @Cacheable(value = "users", key = "#username")
+    //@Cacheable(value = "users", key = "#username")
     public User getUserByUsername(String username) {
-        return userRepository.findByUsername(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found with username: " + username));
+        log.info("username: {}", username);
+         User user = userRepository.findByUsername2(username);
+               // .orElseThrow(() -> new ResourceNotFoundException("User not found with username: " + username));
+        log.info("UserNow: {}", user.toString());
+        return user;
     }
 
     @Override

@@ -3,6 +3,7 @@ package com.papaymoni.middleware.model;
 import lombok.Data;
 
 import javax.persistence.*;
+import javax.validation.constraints.NotBlank;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
@@ -47,4 +48,11 @@ public class Order {
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
     }
+
+    public void setBankCode(String bankCode) {
+    }
+
+//    public @NotBlank(message = "Account number is required") String getAccountNumber() {
+//        return null;
+//    }
 }

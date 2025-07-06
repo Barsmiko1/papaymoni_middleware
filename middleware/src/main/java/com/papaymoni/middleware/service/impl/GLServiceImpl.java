@@ -65,6 +65,11 @@ public class GLServiceImpl implements GLService {
     public void creditFeeAccount(BigDecimal amount) {
         createEntry(null, "CREDIT", "FEE", amount, "NGN", "Fee collected", null);
     }
+    @Override
+    @Transactional
+    public void debitFeeAccount(BigDecimal amount) {
+        createEntry(null, "DEBIT", "FEE", amount, "NGN", "Fee refunded", null);
+    }
 
     @Override
     public List<GLEntry> getUserEntries(User user) {

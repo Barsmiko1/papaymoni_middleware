@@ -20,6 +20,14 @@ import org.apache.http.util.EntityUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
+import com.papaymoni.middleware.model.VirtualAccount;
+import com.papaymoni.middleware.repository.VirtualAccountRepository;
+import org.springframework.transaction.annotation.Transactional;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import javax.annotation.PostConstruct;
 import java.io.IOException;
@@ -35,7 +43,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirtualAccountService {
 
-    @Value("${palmpay.gateway.base.url:https://open-gw-daily.palmpay-inc.com}")
+    @Value("${palmpay.gateway.api.url}")
     private String palmpayGatewayBaseUrl;
 
     private static final String CREATE_ENDPOINT = "/api/v2/virtual/account/label/create";
@@ -43,7 +51,7 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
     private static final String DELETE_ENDPOINT = "/api/v2/virtual/account/label/delete";
     private static final String QUERY_ENDPOINT = "/api/v2/virtual/account/label/queryOne";
 
-    @Value("${palmpay.gateway.app.id:L240927093144197211431}")
+    @Value("${palmpay.gateway.app.id}")
     private String appId;
 
     @Value("${palmpay.gateway.private.key}")
@@ -74,11 +82,16 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
     private final ConcurrentHashMap<String, Long> endpointLatency = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, AtomicInteger> endpointErrors = new ConcurrentHashMap<>();
 
+    private final VirtualAccountRepository virtualAccountRepository;
+    private final ConcurrentHashMap<String, Lock> userCurrencyLocks = new ConcurrentHashMap<>();
+
     public PalmpayStaticVirtualAccountServiceImpl(
             ObjectMapper objectMapper,
-            EncryptionService encryptionService) {
+            EncryptionService encryptionService,
+            VirtualAccountRepository virtualAccountRepository) {
         this.objectMapper = objectMapper;
         this.encryptionService = encryptionService;
+        this.virtualAccountRepository = virtualAccountRepository;
 
         // Configure HTTP client with optimized connection pooling
         RequestConfig requestConfig = RequestConfig.custom()
@@ -109,7 +122,7 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
     }
 
     @Override
-    @Cacheable(value = "virtualAccountCreations", key = "#user.id + '-' + #currency")
+    @Transactional
     public VirtualAccountResponseDto createVirtualAccount(User user, String currency) throws IOException {
         // Check circuit breaker
         if (isCircuitOpen()) {
@@ -117,58 +130,114 @@ public class PalmpayStaticVirtualAccountServiceImpl implements PalmpayStaticVirt
             throw new IOException("Service temporarily unavailable due to downstream issues");
         }
 
-        // Get BVN - decrypt if necessary
-        String bvn = getBvn(user);
-        String customerName = user.getFirstName() + " " + user.getLastName();
-        String email = user.getEmail();
+        // Create a unique key for this user and currency combination
+        String lockKey = user.getId() + "-" + currency;
 
-        log.info("Creating virtual account for customer: {}, email: {}", customerName, email);
+        // Get or create a lock for this specific user-currency combination
+        Lock userCurrencyLock = userCurrencyLocks.computeIfAbsent(lockKey, k -> new ReentrantLock());
 
-        // Generate request payload
-        Map<String, Object> requestParams = new HashMap<>();
-        requestParams.put("requestTime", System.currentTimeMillis());
-        requestParams.put("identityType", "personal");
-        requestParams.put("licenseNumber", bvn);
-        requestParams.put("virtualAccountName", "Palmpay");
-        requestParams.put("version", "V2.0");
-        requestParams.put("customerName", customerName);
-        requestParams.put("email", email);
-        requestParams.put("nonceStr", generateNonce());
-
-        long startTime = System.currentTimeMillis();
+        // Acquire the lock to ensure thread safety
+        userCurrencyLock.lock();
         try {
-            // Make API call
-            Map<String, Object> responseMap = callPalmpayApi(CREATE_ENDPOINT, requestParams);
+            // First, check if the user already has a virtual account for this currency
+            List<VirtualAccount> existingAccounts = virtualAccountRepository.findByUserIdAndCurrencyWithUser(user.getId(), currency);
 
-            // Track latency
-            endpointLatency.put(CREATE_ENDPOINT, System.currentTimeMillis() - startTime);
+            if (!existingAccounts.isEmpty()) {
+                log.info("User {} already has a virtual account for currency {}, returning existing account details", user.getId(), currency);
+                VirtualAccount existingAccount = existingAccounts.get(0);
 
-            if (isSuccessResponse(responseMap)) {
-                Map<String, Object> resultData = (Map<String, Object>) responseMap.get("data");
-
+                // Convert to response DTO
                 VirtualAccountResponseDto response = new VirtualAccountResponseDto();
-                response.setAccountNumber((String) resultData.get("virtualAccountNo"));
-                response.setBankName("Palmpay");
-                response.setBankCode("100004"); // Default bank code for Palmpay
-                response.setAccountName((String) resultData.get("virtualAccountName"));
+                response.setAccountNumber(existingAccount.getAccountNumber());
+                response.setBankName(existingAccount.getBankName());
+                response.setBankCode(existingAccount.getBankCode());
+                response.setAccountName(existingAccount.getAccountName());
+                response.setCurrency(existingAccount.getCurrency());
+                response.setBalance(existingAccount.getBalance());
+                response.setActive(existingAccount.isActive());
+                response.setId(String.valueOf(existingAccount.getId()));
+                response.setExistingAccount(true);
 
-                log.info("Virtual account created successfully: {}", response.getAccountNumber());
-                recordSuccess();
                 return response;
-            } else {
-                String errorMsg = responseMap.containsKey("respMsg")
-                        ? (String) responseMap.get("respMsg")
-                        : "Unknown error";
-                log.error("Failed to create virtual account: {}", errorMsg);
-                recordFailure(CREATE_ENDPOINT);
-                throw new IOException("Failed to create virtual account: " + errorMsg);
             }
-        } catch (IOException e) {
-            recordFailure(CREATE_ENDPOINT);
-            throw e;
+
+            // No existing account found, proceed with creation
+            log.info("Creating new virtual account for user {} with currency {}", user.getId(), currency);
+
+            // Get BVN - decrypt if necessary
+            String bvn = getBvn(user);
+            String customerName = user.getFirstName() + " " + user.getLastName();
+            String email = user.getEmail();
+
+            log.info("Creating virtual account for customer: {}, email: {}", customerName, email);
+
+            // Generate request payload
+            Map<String, Object> requestParams = new HashMap<>();
+            requestParams.put("requestTime", System.currentTimeMillis());
+            requestParams.put("identityType", "personal");
+            requestParams.put("licenseNumber", bvn);
+            requestParams.put("virtualAccountName", customerName);
+            requestParams.put("version", "V2.0");
+            requestParams.put("customerName", customerName);
+            requestParams.put("email", email);
+            requestParams.put("nonceStr", generateNonce());
+
+            long startTime = System.currentTimeMillis();
+            try {
+                // Make API call
+                Map<String, Object> responseMap = callPalmpayApi(CREATE_ENDPOINT, requestParams);
+
+                // Track latency
+                endpointLatency.put(CREATE_ENDPOINT, System.currentTimeMillis() - startTime);
+
+                if (isSuccessResponse(responseMap)) {
+                    Map<String, Object> resultData = (Map<String, Object>) responseMap.get("data");
+
+                    // Use your factory method
+                    VirtualAccountResponseDto response = VirtualAccountResponseDto.fromPalmpayResponse(resultData);
+                    // Ensure it's not flagged as existing
+                    response.setExistingAccount(false);
+
+                    log.info("Virtual account created successfully: {}", response.getAccountNumber());
+                    recordSuccess();
+
+                    return response;
+                } else {
+                    String errorMsg = responseMap.containsKey("respMsg")
+                            ? (String) responseMap.get("respMsg")
+                            : "Unknown error";
+                    log.error("Failed to create virtual account: {}", errorMsg);
+                    recordFailure(CREATE_ENDPOINT);
+                    throw new IOException("Failed to create virtual account: " + errorMsg);
+                }
+            } catch (IOException e) {
+                recordFailure(CREATE_ENDPOINT);
+                throw e;
+            }
+        } finally {
+            // Cleanup logic - only attempt to remove if we can still get the lock
+            boolean lockRemoved = false;
+
+            if (userCurrencyLock.tryLock()) {
+                try {
+                    // We got the lock again, which means no one else is using it
+                    // Safe to remove if this was the last operation for this user-currency
+                    userCurrencyLocks.remove(lockKey);
+                    lockRemoved = true;
+                } finally {
+                    userCurrencyLock.unlock();
+                }
+            }
+
+            // Always release the original lock regardless of cleanup outcome
+            userCurrencyLock.unlock();
+
+            // Log the cleanup result for debugging
+            if (lockRemoved) {
+                log.debug("Lock cleanup successful for user-currency: {}", lockKey);
+            }
         }
     }
-
     @Override
     public boolean updateVirtualAccountStatus(String virtualAccountNo, String status) throws IOException {
         // Check circuit breaker

@@ -15,6 +15,7 @@ public interface VirtualAccountService {
     VirtualAccount getVirtualAccountByAccountNumber(String accountNumber);
     List<VirtualAccount> getUserVirtualAccountsByCurrency(User user, String currency);
 
+
     /**
      * Create a virtual account asynchronously
      * @param user User to create account for

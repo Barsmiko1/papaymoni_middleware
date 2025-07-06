@@ -15,6 +15,7 @@ public interface GLService {
     boolean hasSufficientBalance(User user, BigDecimal amount, String currency);  // Add this new method signature
     void debitUserAccount(User user, BigDecimal amount);
     void creditUserAccount(User user, BigDecimal amount);
+    void debitFeeAccount(BigDecimal amount);  // Added this method for fee refunds
     void creditFeeAccount(BigDecimal amount);
     List<GLEntry> getUserEntries(User user);
 }

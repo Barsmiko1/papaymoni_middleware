@@ -1,5 +1,6 @@
 package com.papaymoni.middleware.dto;
 
+import com.papaymoni.middleware.model.Notification;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -15,6 +16,9 @@ public class UserEventDto implements Serializable {
     private String email;
     private String phoneNumber;
     private String referredBy;
+
+    public void setData(Notification notification) {
+    }
 
     // Add only the fields needed for event processing
     // This avoids serializing the entire User entity

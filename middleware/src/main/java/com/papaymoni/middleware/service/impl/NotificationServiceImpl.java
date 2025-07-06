@@ -127,6 +127,11 @@ public class NotificationServiceImpl implements NotificationService {
     }
 
     @Override
+    public boolean sendWithdrawalNotification(Long userId, String email, BigDecimal amount, String currency, Long transactionId, BigDecimal fee) {
+        return false;
+    }
+
+    @Override
     @Transactional
     public boolean sendWithdrawalNotification(User user, BigDecimal amount, String currency,
                                               Long transactionId, BigDecimal fee) {

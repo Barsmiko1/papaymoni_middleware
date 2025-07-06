@@ -15,38 +15,29 @@ import java.util.Optional;
 @Repository
 public interface TransactionRepository extends JpaRepository<Transaction, Long> {
     List<Transaction> findByUser(User user);
-    List<Transaction> findByUserAndTransactionType(User user, String transactionType);
-    List<Transaction> findByUserAndStatus(User user, String status);
-    List<Transaction> findByUserAndCreatedAtBetween(User user, LocalDateTime start, LocalDateTime end);
+    List<Transaction> findByUserOrderByCreatedAtDesc(User user);
     Optional<Transaction> findByExternalReference(String externalReference);
+
+    @Query("SELECT t FROM Transaction t WHERE t.status = :status AND t.paymentMethod = :paymentMethod")
+    List<Transaction> findByStatusAndPaymentMethod(@Param("status") String status, @Param("paymentMethod") String paymentMethod);
+
+    boolean existsByExternalReference(String externalReference);
+
+    @Query("SELECT t FROM Transaction t LEFT JOIN FETCH t.user LEFT JOIN FETCH t.order LEFT JOIN FETCH t.virtualAccount WHERE t.id = :id")
+    Optional<Transaction> findByIdWithFullFetch(@Param("id") Long id);
+
+    @Query("SELECT t FROM Transaction t LEFT JOIN FETCH t.user LEFT JOIN FETCH t.order LEFT JOIN FETCH t.virtualAccount WHERE t.user.id = :userId")
+    List<Transaction> findByUserWithFullFetch(@Param("userId") Long userId);
+
+    @Query("SELECT t FROM Transaction t LEFT JOIN FETCH t.user LEFT JOIN FETCH t.order LEFT JOIN FETCH t.virtualAccount WHERE t.user.id = :userId AND t.createdAt BETWEEN :start AND :end")
+    List<Transaction> findByUserAndCreatedAtBetweenWithFetch(@Param("userId") Long userId, @Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
+
     List<Transaction> findByUserAndAmountAndStatus(User user, BigDecimal amount, String status);
-    List<Transaction> findByUserAndAmountAndStatusAndTransactionType(User user, BigDecimal amount, String status, String transactionType);
 
-    // Optimized queries with JOIN FETCH
-    @Query("SELECT DISTINCT t FROM Transaction t " +
-            "LEFT JOIN FETCH t.user " +
-            "LEFT JOIN FETCH t.virtualAccount va " +
-            "LEFT JOIN FETCH va.user " +
-            "WHERE t.user.id = :userId " +
-            "ORDER BY t.createdAt DESC")
-    List<Transaction> findByUserWithFetch(@Param("userId") Long userId);
+    @Query("SELECT t.id FROM Transaction t WHERE t.status = :status AND t.paymentMethod = :paymentMethod")
+    List<Long> findIdsByStatusAndPaymentMethod(String status, String paymentMethod);
 
-    @Query("SELECT t FROM Transaction t " +
-            "LEFT JOIN FETCH t.user " +
-            "LEFT JOIN FETCH t.virtualAccount va " +
-            "LEFT JOIN FETCH va.user " +
-            "WHERE t.id = :id")
-    Optional<Transaction> findByIdWithFetch(@Param("id") Long id);
+    //boolean existsByExternalReference(String externalReference);
 
-    @Query("SELECT DISTINCT t FROM Transaction t " +
-            "LEFT JOIN FETCH t.user " +
-            "LEFT JOIN FETCH t.virtualAccount va " +
-            "LEFT JOIN FETCH va.user " +
-            "WHERE t.user.id = :userId " +
-            "AND t.createdAt BETWEEN :start AND :end " +
-            "ORDER BY t.createdAt DESC")
-    List<Transaction> findByUserAndCreatedAtBetweenWithFetch(
-            @Param("userId") Long userId,
-            @Param("start") LocalDateTime start,
-            @Param("end") LocalDateTime end);
+    //Optional<Transaction> findByExternalReference(String orderNo);
 }

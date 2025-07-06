@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -20,6 +21,16 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     @Query("SELECT u FROM User u WHERE u.username = :username OR u.email = :email")
     Optional<User> findByUsernameOrEmail(@Param("username") String username, @Param("email") String email);
+
+    @Query("SELECT u FROM User u LEFT JOIN FETCH u.virtualAccounts")
+    List<User> findAllWithVirtualAccounts();
+
+//    @Query(value = "SELECT * FROM users WHERE username = :username LIMIT 1", nativeQuery = true)
+//    User findByUsername2(@Param("username") String username);
+
+    @Query("SELECT u FROM User u WHERE u.username = :username")
+    User findByUsername2(@Param("username") String username);
+
 
     @Query("SELECT u.email FROM User u WHERE u.id = :userId")
     String getEmailById(@Param("userId") Long userId);

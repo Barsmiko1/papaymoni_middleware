@@ -42,6 +42,10 @@ public class TransactionController {
         try {
             User user = userService.getUserByUsername(currentUser.getUsername());
             List<Transaction> transactions = transactionService.getUserTransactions(user);
+            log.info("Transactions");
+            log.info("User Transactions: {}", transactions.size());
+            log.info("User Transactions: {}", transactions);
+
 
             return ResponseEntity.ok(
                     ApiResponse.success("Transactions retrieved successfully", transactions)

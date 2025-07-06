@@ -23,16 +23,11 @@ public interface VirtualAccountRepository extends JpaRepository<VirtualAccount, 
     @Query("SELECT va FROM VirtualAccount va LEFT JOIN FETCH va.user WHERE va.accountNumber = :accountNumber")
     Optional<VirtualAccount> findByAccountNumberWithJoinFetch(@Param("accountNumber") String accountNumber);
 
-//    @Query("SELECT v FROM VirtualAccount v JOIN FETCH v.user WHERE v.user.id = :userId")
-//    List<VirtualAccount> findByUserIdWithUser(@Param("userId") Long userId);
-//
-//    @Query("SELECT v FROM VirtualAccount v JOIN FETCH v.user WHERE v.accountNumber = :accountNumber")
-//    Optional<VirtualAccount> findByAccountNumberWithUser(@Param("accountNumber") String accountNumber);
-//
     @Query("SELECT v FROM VirtualAccount v JOIN FETCH v.user WHERE v.user.id = :userId AND v.currency = :currency")
     List<VirtualAccount> findByUserIdAndCurrencyWithUser(@Param("userId") Long userId, @Param("currency") String currency);
 
-
+    @Query("SELECT v FROM VirtualAccount v JOIN FETCH v.user WHERE v.user.id = :userId AND v.accountNumber = :accountNumber")
+    Optional<VirtualAccount> findByAccountNumberAndUserIdWithUser(@Param("accountNumber") String accountNumber, @Param("userId") Long userId);
 
     // Keep existing methods as fallback
     List<VirtualAccount> findByUserId(Long userId);

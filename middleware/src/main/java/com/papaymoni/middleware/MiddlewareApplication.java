@@ -8,7 +8,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication
 @EnableScheduling
 @EnableCaching
-public class MiddlewareApplication {
+public class  MiddlewareApplication {
 	public static void main(String[] args) {
 		SpringApplication.run(MiddlewareApplication.class, args);
 	}
