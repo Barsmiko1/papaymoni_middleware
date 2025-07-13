@@ -37,6 +37,22 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
     @Query("SELECT t.id FROM Transaction t WHERE t.status = :status AND t.paymentMethod = :paymentMethod")
     List<Long> findIdsByStatusAndPaymentMethod(String status, String paymentMethod);
 
+    List<Transaction> findByUserAndTransactionTypeAndCurrencyAndStatus(
+            User user, String transactionType, String currency, String status);
+
+    @Query("SELECT SUM(t.amount) FROM Transaction t WHERE t.user = :user " +
+            "AND t.transactionType IN ('WITHDRAWAL', 'EXCHANGE') " +
+            "AND t.currency = :currency AND t.status = 'COMPLETED'")
+    BigDecimal sumCompletedTransactionsByUserAndCurrency(
+            @Param("user") User user, @Param("currency") String currency);
+
+    @Query("SELECT COUNT(t) FROM Transaction t WHERE t.user = :user " +
+            "AND t.transactionType = 'REFERRAL_BONUS' AND t.status = 'COMPLETED'")
+    long countReferralBonusesByUser(@Param("user") User user);
+
+    List<Transaction> findByUserAndTransactionTypeAndStatus(
+            User user, String transactionType, String status);
+
     //boolean existsByExternalReference(String externalReference);
 
     //Optional<Transaction> findByExternalReference(String orderNo);

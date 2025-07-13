@@ -34,6 +34,8 @@ public class PaymentServiceImpl implements PaymentService {
     private final WalletBalanceService walletBalanceService;
     private final ReceiptService receiptService;
     private final VirtualAccountService virtualAccountService;
+    private final ReferralService referralService;
+    private final CashbackService cashbackService;
 
     // Fee configuration
     private static final BigDecimal FEE_PERCENTAGE = new BigDecimal("0.012"); // 1.2%
@@ -42,6 +44,7 @@ public class PaymentServiceImpl implements PaymentService {
     private static final BigDecimal FEE_CAP_EUR = new BigDecimal("4.50");
     private static final BigDecimal FEE_CAP_GBP = new BigDecimal("4.00");
     private static final BigDecimal FEE_CAP_USDT = new BigDecimal("5.00");
+
 
     /**
      * Calculate the fee for a given amount (defaults to NGN)
@@ -192,6 +195,14 @@ public class PaymentServiceImpl implements PaymentService {
         Transaction savedTransaction = transactionRepository.save(transaction);
         log.info("Saved transaction {} for order {}", savedTransaction.getId(), order.getId());
 
+        // Process cashback
+        try {
+            cashbackService.processCashback(user, amount, currency, "WITHDRAWAL");
+            referralService.processReferralBonus(user, amount, currency);
+        } catch (Exception e) {
+            log.warn("Failed to process cashback/referral for payment: {}", e.getMessage());
+        }
+
         // Publish payment processed event
         rabbitTemplate.convertAndSend(PAYMENT_EXCHANGE, PAYMENT_PROCESSED_KEY,
                 new PaymentProcessedEvent(savedTransaction.getId(), user.getId(), order.getId()));
@@ -299,6 +310,20 @@ public class PaymentServiceImpl implements PaymentService {
 
         Transaction savedTransaction = transactionRepository.save(transaction);
         log.info("Saved transaction {} for order {}", savedTransaction.getId(), order.getId());
+
+        // Process cashback for withdrawal transaction
+        try {
+            cashbackService.processCashback(user, amount, currency, "WITHDRAWAL");
+        } catch (Exception e) {
+            log.warn("Failed to process cashback for buy order payment: {}", e.getMessage());
+        }
+
+        // Process referral bonus check
+        try {
+            referralService.processReferralBonus(user, amount, currency);
+        } catch (Exception e) {
+            log.warn("Failed to process referral bonus check: {}", e.getMessage());
+        }
 
         // Generate receipt
         try {
